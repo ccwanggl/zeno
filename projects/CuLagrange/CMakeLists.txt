@@ -35,8 +35,10 @@ target_sources(zeno PRIVATE
 
 # pbd
 target_sources(zeno PRIVATE
-  pbd/PBDInit.cu
-  pbd/PBDPipeline.cu
+  pbd/ConstraintsBuilder.cu
+  pbd/ConstraintsSolver.cu
+  pbd/CollisionSolver.cu
+  pbd/ConstraintsUpdator.cu
 )
 
 # fem-cloth
@@ -83,20 +85,13 @@ target_sources(zeno PRIVATE
   fem/BoundaryCondition.cu
   fem/Collisions.cu
 
-  # fem/Check.cu
   fem/Generation.cpp
 
   fem/FleshDynamicStepping.cu # CHECK THIS
   fem/collision_energy/vertex_face_collision.hpp
   fem/collision_energy/vertex_face_sqrt_collision.hpp
-  # fem/collision_energy/edge_edge_collision.hpp
-  # fem/collision_energy/edge_edge_sqrt_collition.hpp
   fem/collision_energy/evaluate_collision.hpp
   fem/collision_energy/collision_utils.hpp
-  # fem/TendonDynamicStepping.cu
-  # fem/FEMFleshDynamicFast.cu
-  # fem/StrainLimitRepulsion.cu
-  # fem/KinematicCollisionRepulsion.cu
 )
 
 # geometry
@@ -112,25 +107,25 @@ target_sources(zeno PRIVATE
   geometry/kernel/compute_characteristic_length.hpp
   geometry/kernel/topology.hpp
   geometry/kernel/calculate_facet_normal.hpp
-  geometry/kernel/calculate_bisector_normal.hpp
+  geometry/kernel/halfedge_structure.hpp
+  # geometry/kernel/calculate_bisector_normal.hpp
   geometry/kernel/tiled_vector_ops.hpp
   geometry/kernel/intersection.hpp
+
+
+  geometry/Transform.cu
   geometry/SolveLaplacian.cu
   geometry/VectorField.cu
-  geometry/SetupSkinningWeight.cu
-  geometry/Skinning.cu
   geometry/BaryCentricInterpolator.cu
-  geometry/BiharmonicBoundedWeight.cu
   geometry/MeshIO.cu
   geometry/Jiggle.cu
   geometry/DeformationField.cu
-  # geometry/VectorField.cu
-  geometry/CollisionVis.cu # CHECK THIS
-  # geometry/CalcSurfaceArea.cu
+  # geometry/CollisionVis.cu # CHECK THIS
   geometry/BasicGeoNodes.cu
-  geometry/MarkSurfaceTag.cu
-  geometry/SurfaceBinder.cu
-  geometry/MarkInversion.cu
   geometry/Topology.cu
-  geometry/MarkCollisionRegion.cu # CHECK THIS
+  geometry/Intersections.cu # CHECK THIS
+  geometry/Detangle.cu
+  geometry/HalfEdgeStructures.cu
+
+  geometry/ShapeMatching.cu
 )

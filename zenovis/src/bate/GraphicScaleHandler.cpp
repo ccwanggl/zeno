@@ -67,42 +67,36 @@ struct ScaleHandler final : IGraphicHandler {
     vec3f center;
     float bound;
     float scale;
-    int mode;
     int coord_sys;
 
     Program *lines_prog;
     std::unique_ptr<Buffer> lines_ebo;
     size_t lines_count;
 
+    static constexpr float cube_factor = 0.08f;
+    static constexpr float axis_factor = 0.8f;
+    static constexpr float square_factor = 0.1f;
+    static constexpr float icircle_factor = 0.2f; // inner circle
+    static constexpr float ocircle_factor = 1.0f; // outer circle
+    static constexpr float color_factor = 0.8f;
+
     explicit ScaleHandler(Scene *scene_, vec3f &center_, float scale_)
-        : scene(scene_), center(center_), scale(scale_), mode(INTERACT_NONE) {
+        : scene(scene_), center(center_), scale(scale_) {
         vbo = std::make_unique<Buffer>(GL_ARRAY_BUFFER);
     }
 
     void draw() override {
-        std::vector<zeno::vec3f> mem;
-
-        float cx = scene->camera->m_zxx.cx;
-        float cy = scene->camera->m_zxx.cy;
-        float cz = scene->camera->m_zxx.cz;
-        float theta = scene->camera->m_zxx.theta;
-        float phi = scene->camera->m_zxx.phi;
-        float radius = scene->camera->m_zxx.radius;
-
-        auto camera_center = glm::vec3(cx, cy, cz);
-        float cos_t = glm::cos(theta), sin_t = glm::sin(theta);
-        float cos_p = glm::cos(phi), sin_p = glm::sin(phi);
-        glm::vec3 front(cos_t * sin_p, sin_t, -cos_t * cos_p);
-
-        auto camera_pos = camera_center - front * radius;
-
-        auto dist = glm::distance(camera_pos, glm::vec3(center[0], center[1], center[2]));
+        auto dist = glm::distance(scene->camera->m_pos, glm::vec3(center[0], center[1], center[2]));
 
         bound = dist / 5.0f * scale;
 
-        vec3f r = vec3f(0.8, 0.2, 0.2);
-        vec3f g = vec3f(0.2, 0.6, 0.2);
-        vec3f b = vec3f(0.2, 0.2, 0.8);
+        vec3f color_x = vec3f(0.8, 0.2, 0.2) * (hover_mode == INTERACT_X ? 1.0 : color_factor);
+        vec3f color_y = vec3f(0.2, 0.6, 0.2) * (hover_mode == INTERACT_Y ? 1.0 : color_factor);
+        vec3f color_z = vec3f(0.2, 0.2, 0.8) * (hover_mode == INTERACT_Z ? 1.0 : color_factor);
+        vec3f color_yz = vec3f(0.6, 0.2, 0.2) * (hover_mode == INTERACT_YZ ? 1.0 : color_factor);
+        vec3f color_xz = vec3f(0.2, 0.6, 0.2) * (hover_mode == INTERACT_XZ ? 1.0 : color_factor);
+        vec3f color_xy = vec3f(0.2, 0.2, 0.6) * (hover_mode == INTERACT_XY ? 1.0 : color_factor);
+        vec3f color_circle = vec3f(1.0, 1.0, 1.0) * (hover_mode == INTERACT_XYZ ? 1.0 : color_factor);
 
         lines_prog = scene->shaderMan->compile_program(vert_code, frag_code);
 
@@ -113,33 +107,53 @@ struct ScaleHandler final : IGraphicHandler {
         auto y_axis = vec3f(0, 1, 0);
         auto z_axis = vec3f(0, 0, 1);
 
+        auto axis_size = bound * axis_factor;
+        auto cube_size = bound * cube_factor;
+        auto square_size = bound * square_factor;
+        auto icircle_size = bound * icircle_factor;
+        auto ocircle_size = bound * ocircle_factor;
+
         // x axis
         if (mode == INTERACT_NONE || mode == INTERACT_X) {
-            drawAxis(center, x_axis, r, bound, vbo);
-            drawCube(center + bound * x_axis, y_axis, z_axis, r, bound * 0.08f, vbo);
+            drawAxis(center, x_axis, color_x, axis_size, vbo);
+            drawCube(center + axis_size * x_axis, y_axis, z_axis, color_x, cube_size, vbo);
         }
-
+        // y axis
         if (mode == INTERACT_NONE || mode == INTERACT_Y) {
-            drawAxis(center, y_axis, g, bound, vbo);
-            drawCube(center + bound * y_axis, z_axis, x_axis, g, bound * 0.08f, vbo);
+            drawAxis(center, y_axis, color_y, axis_size, vbo);
+            drawCube(center + axis_size * y_axis, z_axis, x_axis, color_y, cube_size, vbo);
         }
-
+        // z axis
         if (mode == INTERACT_NONE || mode == INTERACT_Z) {
-            drawAxis(center, z_axis, b, bound, vbo);
-            drawCube(center + bound * z_axis, x_axis, y_axis, b, bound * 0.08f, vbo);
+            drawAxis(center, z_axis, color_z, axis_size, vbo);
+            drawCube(center + axis_size * z_axis, x_axis, y_axis, color_z, cube_size, vbo);
         }
-
-        if (mode == INTERACT_NONE || mode == INTERACT_YZ)
-            drawSquare(center, y_axis, z_axis, {0.6, 0.2, 0.2}, bound * 0.1f, vbo);
-
-        if (mode == INTERACT_NONE || mode == INTERACT_XZ)
-            drawSquare(center, z_axis, x_axis, {0.2, 0.6, 0.2}, bound * 0.1f, vbo);
-
-        if (mode == INTERACT_NONE || mode == INTERACT_XY)
-            drawSquare(center, x_axis, y_axis, {0.2, 0.2, 0.6}, bound * 0.1f, vbo);
-
-        if (mode == INTERACT_NONE || mode == INTERACT_XYZ)
-            drawCube(center, y_axis, z_axis, {0.51, 0.17, 0.85}, bound * 0.08f, vbo);
+        // yz
+        if (mode == INTERACT_NONE || mode == INTERACT_YZ) {
+            drawSquare(center, y_axis, z_axis, color_yz, square_size, vbo);
+        }
+        // xz
+        if (mode == INTERACT_NONE || mode == INTERACT_XZ) {
+            drawSquare(center, z_axis, x_axis, color_xz, square_size, vbo);
+        }
+        // xy
+        if (mode == INTERACT_NONE || mode == INTERACT_XY) {
+            drawSquare(center, x_axis, y_axis, color_xy, square_size, vbo);
+        }
+        // xyz
+        if (mode == INTERACT_NONE || mode == INTERACT_XYZ) {
+            const auto& view = scene->camera->get_view_matrix();
+            // http://www.opengl-tutorial.org/cn/intermediate-tutorials/billboards-particles/billboards/
+            // always face camera
+            // This is equivalent to mlutiplying (1,0,0) and (0,1,0) by inverse(ViewMatrix).
+            // ViewMatrix is orthogonal (it was made this way), 
+            // so its inverse is also its transpose, 
+            // and transposing a matrix is "free" (inversing is slooow)
+            auto right_world = vec3f(view[0][0], view[1][0], view[2][0]);
+            auto up_world = vec3f(view[0][1], view[1][1], view[2][1]);
+            drawCircle(center, right_world, up_world, color_circle, icircle_size, bound * 0.01f, vbo);
+            drawCircle(center, right_world, up_world, color_circle, ocircle_size, bound * 0.01f, vbo);
+        }
     }
 
     virtual int collisionTest(glm::vec3 ori, glm::vec3 dir) override {
@@ -147,26 +161,19 @@ struct ScaleHandler final : IGraphicHandler {
         auto y_axis = glm::vec3(0, 1, 0);
         auto z_axis = glm::vec3(0, 0, 1);
 
-        auto model_matrix =glm::translate(zeno::vec_to_other<glm::vec3>(center));
-
-        // xyz handler
-        float cube_size = bound * 0.08f; float t;
-        auto xyz_handler_max = cube_size * glm::vec3(1.0f);
-        auto xyz_handler_min = -xyz_handler_max;
-        if (rayIntersectOBB(ori, dir, xyz_handler_min, xyz_handler_max, model_matrix, t)) {
-            mode = INTERACT_XYZ;
-            return INTERACT_XYZ;
-        }
+        auto model_matrix = glm::translate(zeno::vec_to_other<glm::vec3>(center));
+        const auto& view = scene->camera->get_view_matrix();
+        
+        float t;
 
         // axis handlers
-        float axis_handler_l = bound * 1.1f;
+        float axis_handler_l = bound * axis_factor;
         float axis_handler_w = bound * 0.1f;
 
         // x handler
         auto x_handler_max = axis_handler_l * x_axis + axis_handler_w * y_axis + axis_handler_w * z_axis;
         auto x_handler_min = glm::vec3(0, -axis_handler_w, -axis_handler_w);
         if (rayIntersectOBB(ori, dir, x_handler_min, x_handler_max, model_matrix, t)) {
-            mode = INTERACT_X;
             return INTERACT_X;
         }
 
@@ -174,7 +181,6 @@ struct ScaleHandler final : IGraphicHandler {
         auto y_handler_max = axis_handler_w * x_axis + axis_handler_l * y_axis + axis_handler_w * z_axis;
         auto y_handler_min = glm::vec3(-axis_handler_w, 0, -axis_handler_w);
         if (rayIntersectOBB(ori, dir, y_handler_min, y_handler_max, model_matrix, t)) {
-            mode = INTERACT_Y;
             return INTERACT_Y;
         }
 
@@ -182,20 +188,18 @@ struct ScaleHandler final : IGraphicHandler {
         auto z_handler_max = axis_handler_w * x_axis + axis_handler_w * y_axis + axis_handler_l * z_axis;
         auto z_handler_min = glm::vec3(-axis_handler_w, -axis_handler_w, 0);
         if (rayIntersectOBB(ori, dir, z_handler_min, z_handler_max, model_matrix, t)) {
-            mode = INTERACT_Z;
             return INTERACT_Z;
         }
 
         // plane handlers
         float square_ctr_offset = bound;
-        float square_size = bound * 0.1f;
+        float square_size = bound * square_factor;
 
         // xy handler
         auto xy_base = glm::normalize(x_axis + y_axis);
         auto xy_handler_max = xy_base * (square_ctr_offset + square_size);
         auto xy_handler_min = xy_base * (square_ctr_offset - square_size);
         if (rayIntersectSquare(ori, dir, xy_handler_min, xy_handler_max, z_axis, model_matrix)) {
-            mode = INTERACT_XY;
             return INTERACT_XY;
         }
 
@@ -204,7 +208,6 @@ struct ScaleHandler final : IGraphicHandler {
         auto yz_handler_max = yz_base * (square_ctr_offset + square_size);
         auto yz_handler_min = yz_base * (square_ctr_offset - square_size);
         if (rayIntersectSquare(ori, dir, yz_handler_min, yz_handler_max, x_axis, model_matrix)) {
-            mode = INTERACT_YZ;
             return INTERACT_YZ;
         }
 
@@ -213,20 +216,26 @@ struct ScaleHandler final : IGraphicHandler {
         auto xz_handler_max = xz_base * (square_ctr_offset + square_size);
         auto xz_handler_min = xz_base * (square_ctr_offset - square_size);
         if (rayIntersectSquare(ori, dir, xz_handler_min, xz_handler_max, y_axis, model_matrix)) {
-            mode = INTERACT_XZ;
             return INTERACT_XZ;
         }
 
-        mode = INTERACT_NONE;
+        // xyz handler
+        // the other handlers are in the range of xyz handler, so check xyz at last 
+        float i_radius = bound * icircle_factor;
+        float o_radius = bound * ocircle_factor;
+        float thickness = bound * 0.1f;
+        auto right_world = vec3f(view[0][0], view[1][0], view[2][0]);
+        auto up_world = vec3f(view[0][1], view[1][1], view[2][1]);
+        if (rayIntersectRing(ori, dir, glm::vec3(0), o_radius, i_radius, zeno::vec_to_other<glm::vec3>(right_world),
+            zeno::vec_to_other<glm::vec3>(up_world), thickness, model_matrix)) {
+            return INTERACT_XYZ;
+        }
+
         return INTERACT_NONE;
     }
 
     virtual void setCenter(zeno::vec3f c) override {
         center = c;
-    }
-
-    virtual void setMode(int m) override {
-        mode = m;
     }
 
     virtual void setCoordSys(int c) override {

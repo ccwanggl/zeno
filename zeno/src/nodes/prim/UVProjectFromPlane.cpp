@@ -17,10 +17,10 @@
 #include "tinyexr.h"
 #include "zeno/utils/string.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#define STB_IMAGE_WRITE_STATIC
 #include <tinygltf/stb_image_write.h>
 #include <vector>
-#include <zeno/types/HeatmapObject.h>
+#include <glm/glm.hpp>
+#include <glm/gtx/transform.hpp>
 
 static const float eps = 0.0001f;
 
@@ -28,7 +28,7 @@ namespace zeno {
 struct UVProjectFromPlane : zeno::INode {
     virtual void apply() override {
         auto prim = get_input<PrimitiveObject>("prim");
-        auto &uv = prim->verts.add_attr<vec3f>("uv");
+        auto &uv = prim->verts.add_attr<zeno::vec3f>("uv");
         auto refPlane = get_input<PrimitiveObject>("refPlane");
         if (refPlane->verts.size() != 4) {
             zeno::log_error("refPlane must be 1 * 1 plane!");
@@ -51,9 +51,9 @@ struct UVProjectFromPlane : zeno::INode {
             auto v = zeno::clamp(zeno::dot(proj, vDir) / vLength, 0, 1);
             uv[i] = zeno::vec3f(u,  v, 0);
         }
-        auto &uv0 = prim->tris.add_attr<vec3f>("uv0");
-        auto &uv1 = prim->tris.add_attr<vec3f>("uv1");
-        auto &uv2 = prim->tris.add_attr<vec3f>("uv2");
+        auto &uv0 = prim->tris.add_attr<zeno::vec3f>("uv0");
+        auto &uv1 = prim->tris.add_attr<zeno::vec3f>("uv1");
+        auto &uv2 = prim->tris.add_attr<zeno::vec3f>("uv2");
         for (auto i = 0; i < prim->tris.size(); i++) {
             auto tri = prim->tris[i];
             uv0[i] = uv[tri[0]];
@@ -150,6 +150,11 @@ static vec3f Sample2DLinearClamp(vec2f texCoord, const vec3f* data, int w, int h
     return mix(mix(s1, s2, f[0]), mix(s3, s4, f[0]), f[1]);
 }
 struct PrimSample2D : zeno::INode {
+    static glm::vec3 mapplypos(glm::mat4 const &matrix, glm::vec3 const &vector) {
+        auto vector4 = matrix * glm::vec4(vector, 1.0f);
+        return glm::vec3(vector4) / vector4.w;
+    }
+
     virtual void apply() override {
         auto prim = get_input<PrimitiveObject>("prim");
         auto srcChannel = get_input2<std::string>("uvChannel");
@@ -158,7 +163,22 @@ struct PrimSample2D : zeno::INode {
         auto image = get_input2<PrimitiveObject>("image");
         auto wrap = get_input2<std::string>("wrap");
         auto filter = get_input2<std::string>("filter");
-        auto borderColor = get_input2<vec3f>("borderColor");
+        auto borderColor = get_input2<zeno::vec3f>("borderColor");
+
+        auto invertU = get_input2<bool>("invert U");
+        auto invertV = get_input2<bool>("invert V");
+        auto scale = get_input2<float>("scale");
+        auto rotate = get_input2<float>("rotate");
+        auto translate = get_input2<zeno::vec2f>("translate");
+
+        glm::vec3 pre_scale = glm::vec3(scale, scale, 0 );
+        if(invertU) pre_scale.x *= -1;
+        if(invertV) pre_scale.y *= -1;
+        glm::mat4 matScal  = glm::scale( pre_scale );
+        glm::mat4 matRot   = glm::rotate( (float)(rotate * M_PI / 180), glm::vec3(0,0,1) );
+        glm::mat4 matTrans = glm::translate(glm::vec3(translate[0], translate[1], 0));
+
+        auto matrix = glm::translate( glm::vec3(0.5,0.5,0) )*matTrans*matRot*matScal*glm::translate( glm::vec3(-0.5,-0.5,0) );
 
         if (!image->userData().has("isImage")) {
             throw zeno::Exception("not an image");
@@ -230,15 +250,30 @@ struct PrimSample2D : zeno::INode {
             auto &uv = prim->attr<zeno::vec3f>(srcChannel);
             #pragma omp parallel for
             for (auto i = 0; i < uv.size(); i++) {
-                clrs[i] = queryColor(uv[i], data, w, h, borderColor);
+                auto coord = zeno::vec_to_other<glm::vec3>(uv[i]);
+                coord = mapplypos(matrix, coord);
+
+                clrs[i] = queryColor(zeno::other_to_vec<3>(coord), data, w, h, borderColor);
             }
         }
         else if (uvSource == "tris") {
-            auto uv0 = prim->tris.attr<vec3f>("uv0");
-            auto uv1 = prim->tris.attr<vec3f>("uv1");
-            auto uv2 = prim->tris.attr<vec3f>("uv2");
+            auto uv0 = prim->tris.attr<zeno::vec3f>("uv0");
+            auto uv1 = prim->tris.attr<zeno::vec3f>("uv1");
+            auto uv2 = prim->tris.attr<zeno::vec3f>("uv2");
+
             #pragma omp parallel for
             for (auto i = 0; i < prim->tris.size(); i++) {
+                // not tested just for completeness
+                auto coord = zeno::vec_to_other<glm::vec3>(uv0[i]);
+                coord = mapplypos(matrix, coord);
+                uv0[i] = zeno::other_to_vec<3>(coord);
+                coord = zeno::vec_to_other<glm::vec3>(uv1[i]);
+                coord = mapplypos(matrix, coord);
+                uv1[i] = zeno::other_to_vec<3>(coord);
+                coord = zeno::vec_to_other<glm::vec3>(uv2[i]);
+                coord = mapplypos(matrix, coord);
+                uv2[i] = zeno::other_to_vec<3>(coord);
+
                 auto tri = prim->tris[i];
                 clrs[tri[0]] = queryColor(uv0[i], data, w, h, borderColor);
                 clrs[tri[1]] = queryColor(uv1[i], data, w, h, borderColor);
@@ -251,6 +286,13 @@ struct PrimSample2D : zeno::INode {
             #pragma omp parallel for
             for (auto i = 0; i < prim->loops.size(); i++) {
                 auto uv = prim->uvs[loopsuv[i]];
+
+                // not tested just for completeness
+                auto coord = zeno::vec_to_other<glm::vec3>({uv[0], uv[1], 0});
+                coord = mapplypos(matrix, coord);
+                auto temp = zeno::other_to_vec<3>(coord);
+                uv = {temp[0], temp[1]};
+
                 int index = prim->loops[i];
                 clrs[index] = queryColor({uv[0], uv[1], 0}, data, w, h, borderColor);
             }
@@ -275,6 +317,11 @@ ZENDEFNODE(PrimSample2D, {
         {"enum REPEAT CLAMP_TO_EDGE CLAMP_TO_BORDER", "wrap", "REPEAT"},
         {"enum nearest linear", "filter", "nearest"},
         {"vec3f", "borderColor", "0,0,0"},
+        {"bool", "invert U", "0"},
+        {"bool", "invert V", "0"},
+        {"float", "scale", "1"},
+        {"float", "rotate", "0"},
+        {"vec2f", "translate", "0,0"},
     },
     {
         {"PrimitiveObject", "outPrim"}
@@ -405,19 +452,85 @@ ZENDEFNODE(ReadImageFile, {
         {"PrimitiveObject", "image"},
     },
     {},
-    {"comp"},
+    {"deprecated"},
 });
 
-template<typename T>
-void image_flip_vertical(T *v, int w, int h) {
-    for (auto j = 0; j < h / 2; j++) {
-        for (auto i = 0; i < w; i++) {
-            auto index1 = i + j * w;
-            auto index2 = i + (h - j - 1) * w;
-            std::swap(v[index1], v[index2]);
-        }
+std::shared_ptr<PrimitiveObject> readImageFileRawData(std::string const &path) {
+    int w, h, n;
+    stbi_set_flip_vertically_on_load(true);
+    std::string native_path = std::filesystem::u8path(path).string();
+    uint8_t * data = stbi_load(native_path.c_str(), &w, &h, &n, 0);
+    if (!data) {
+        throw zeno::Exception("cannot open image file at path: " + native_path);
     }
+    scope_exit delData = [=] { stbi_image_free(data); };
+    auto img = std::make_shared<PrimitiveObject>();
+    img->verts.resize(w * h);
+    if (n == 3) {
+        for (int i = 0; i < w * h; i++) {
+            img->verts[i] = {data[i*3+0] / 255.0f, data[i*3+1] / 255.0f, data[i*3+2] / 255.0f};
+        }
+    } else if (n == 4) {
+        auto &alpha = img->verts.add_attr<float>("alpha");
+        for (int i = 0; i < w * h; i++) {
+            img->verts[i] = {data[i*4+0] / 255.0f, data[i*4+1] / 255.0f, data[i*4+2] / 255.0f};
+            alpha[i] = data[i*4+3] / 255.0f;
+        }
+    } else if (n == 2) {
+        for (int i = 0; i < w * h; i++) {
+            img->verts[i] = {data[i*2+0] / 255.0f, data[i*2+1] / 255.0f, 0};
+        }
+    } else if (n == 1) {
+        for (int i = 0; i < w * h; i++) {
+            img->verts[i] = vec3f(data[i] / 255.0f);
+        }
+    } else {
+        throw zeno::Exception("too much number of channels");
+    }
+    img->userData().set2("isImage", 1);
+    img->userData().set2("w", w);
+    img->userData().set2("h", h);
+    return img;
 }
+
+struct ReadImageFile_v2 : INode {
+    virtual void apply() override {
+        auto path = get_input2<std::string>("path");
+        std::shared_ptr<PrimitiveObject> image;
+
+        if (zeno::ends_with(path, ".exr", false)) {
+            image = readExrFile(path);
+        }
+        else if (zeno::ends_with(path, ".pfm", false)) {
+            image = readPFMFile(path);
+        }
+        else {
+            image = readImageFileRawData(path);
+        }
+        if (get_input2<bool>("srgb_to_linear")) {
+            for (auto i = 0; i < image->size(); i++) {
+                image->verts[i] = pow(image->verts[i], 2.2f);
+            }
+        }
+        int w = image->userData().get2<int>("w");
+        auto &ij = image->verts.add_attr<zeno::vec3f>("ij");
+        for (auto i = 0; i < image->verts.size(); i++) {
+            ij[i] = vec3f(i % w, i / w, 0);
+        }
+        set_output("image", image);
+    }
+};
+ZENDEFNODE(ReadImageFile_v2, {
+    {
+        {"readpath", "path"},
+        {"bool", "srgb_to_linear", "0"},
+    },
+    {
+        {"PrimitiveObject", "image"},
+    },
+    {},
+    {"comp"},
+});
 
 struct ImageFlipVertical : INode {
     virtual void apply() override {
@@ -441,7 +554,7 @@ ZENDEFNODE(ImageFlipVertical, {
         {"image"},
     },
     {},
-    {"comp"},
+    {"deprecated"},
 });
 
 void write_pfm(std::string& path, int w, int h, vec3f *rgb) {
@@ -529,7 +642,6 @@ struct WriteImageFile : INode {
         }
         else if(type == "exr"){
             std::vector<float> data2(w * h * n);
-            constexpr float gamma = 2.2f;
             for (int i = 0; i < w * h; i++) {
                 data2[n * i + 0] = image->verts[i][0];
                 data2[n * i + 1] = image->verts[i][1];
@@ -544,39 +656,13 @@ struct WriteImageFile : INode {
                 }
             }
 
-            // Create EXR header
-            EXRHeader header;
-            InitEXRHeader(&header);
-
-            // Set image width, height, and number of channels
-            header.num_channels = n;
-
-            // Create EXR image
-            EXRImage exrImage;
-            InitEXRImage(&exrImage);
-
-            // Set image data
-            exrImage.num_channels = n;
-            exrImage.width = w;
-            exrImage.height = h;
-            exrImage.images = reinterpret_cast<unsigned char**>(&data2[0]);
-
-            // Set image channel names (optional)
-            std::vector<std::string> channelNames = {"R", "G", "B", "A"};
-            header.channels = new EXRChannelInfo[n];
-            for (int i = 0; i < n; ++i) {
-                strncpy(header.channels[i].name, channelNames[i].c_str(), 255);
-                header.channels[i].name[strlen(channelNames[i].c_str())] = '\0';
-                header.channels[i].pixel_type = TINYEXR_PIXELTYPE_FLOAT;
-            }
-
             const char* err;
             path += ".exr";
             std::string native_path = std::filesystem::u8path(path).string();
             int ret = SaveEXR(data2.data(),w,h,n,0,native_path.c_str(),&err);
 
             if (ret != TINYEXR_SUCCESS) {
-                zeno::log_error("Error saving EXR file: %s\n", err);
+                zeno::log_error("Error saving EXR file: {}\n", err);
                 FreeEXRErrorMessage(err); // free memory allocated by the library
                 return;
             }
@@ -598,6 +684,98 @@ ZENDEFNODE(WriteImageFile, {
         {"enum png jpg exr pfm", "type", "png"},
         {"mask"},
         {"bool", "gamma", "1"},
+    },
+    {
+        {"image"},
+    },
+    {},
+    {"deprecated"},
+});
+
+struct WriteImageFile_v2 : INode {
+    virtual void apply() override {
+        auto image = get_input<PrimitiveObject>("image");
+        auto path = get_input2<std::string>("path");
+        path = create_directories_when_write_file(path);
+        auto type = get_input2<std::string>("type");
+        auto &ud = image->userData();
+        int w = ud.get2<int>("w");
+        int h = ud.get2<int>("h");
+        int n = 4;
+        auto A = std::make_shared<PrimitiveObject>();
+        A->verts.resize(image->size());
+        A->verts.add_attr<float>("alpha", 1.0);
+        std::vector<float> &alpha = A->verts.attr<float>("alpha");
+        if(image->verts.has_attr("alpha")){
+            alpha = image->verts.attr<float>("alpha");
+        }
+        if(has_input("mask")) {
+            auto mask = get_input2<PrimitiveObject>("mask");
+            image->verts.add_attr<float>("alpha");
+            image->verts.attr<float>("alpha") = mask->verts.attr<float>("alpha");
+            alpha = mask->verts.attr<float>("alpha");
+        }
+        std::vector<char> data(w * h * n);
+        float gamma = get_input2<bool>("linear_to_srgb_when_save")? 1.0f/2.2f: 1.0f;
+        for (int i = 0; i < w * h; i++) {
+            data[n * i + 0] = (char)(255 * pow(image->verts[i][0], gamma));
+            data[n * i + 1] = (char)(255 * pow(image->verts[i][1], gamma));
+            data[n * i + 2] = (char)(255 * pow(image->verts[i][2], gamma));
+            data[n * i + 3] = (char)(255 * alpha[i]);
+        }
+        if(type == "jpg"){
+            stbi_flip_vertically_on_write(1);
+            stbi_write_jpg(path.c_str(), w, h, n, data.data(), 100);
+        }
+        else if(type == "png"){
+            stbi_flip_vertically_on_write(1);
+            stbi_write_png(path.c_str(), w, h, n, data.data(),0);
+        }
+        else if(type == "hdr"){
+            stbi_flip_vertically_on_write(1);
+            stbi_write_hdr(path.c_str(), w, h, 3, (float*)image->verts.data());
+        }
+        else if(type == "exr"){
+            std::vector<float> data2(w * h * n);
+            for (int i = 0; i < w * h; i++) {
+                data2[n * i + 0] = image->verts[i][0];
+                data2[n * i + 1] = image->verts[i][1];
+                data2[n * i + 2] = image->verts[i][2];
+                data2[n * i + 3] = alpha[i];
+            }
+            for (auto i = 0; i < h / 2; i++) {
+                for (auto x = 0; x < w * 4; x++) {
+                    auto index1 = i * (w * 4) + x;
+                    auto index2 = (h - 1 - i) * (w * 4) + x;
+                    std::swap(data2[index1], data2[index2]);
+                }
+            }
+
+            const char* err;
+            int ret = SaveEXR(data2.data(),w,h,n,0,path.c_str(),&err);
+
+            if (ret != TINYEXR_SUCCESS) {
+                zeno::log_error("Error saving EXR file: {}\n", err);
+                FreeEXRErrorMessage(err); // free memory allocated by the library
+                return;
+            }
+            else{
+                zeno::log_info("EXR file saved successfully.");
+            }
+        }
+        else if (type == "pfm") {
+            write_pfm(path, image);
+        }
+        set_output("image", image);
+    }
+};
+ZENDEFNODE(WriteImageFile_v2, {
+    {
+        {"image"},
+        {"writepath", "path"},
+        {"enum png jpg exr pfm hdr", "type", "png"},
+        {"mask"},
+        {"bool", "linear_to_srgb_when_save", "0"},
     },
     {
         {"image"},
@@ -678,6 +856,85 @@ ZENDEFNODE(ImageFloatGaussianBlur, {
     },
     {
         {"image"},
+    },
+    {},
+    {"deprecated"},
+});
+
+struct EnvMapRot : INode {
+    virtual void apply() override {
+        auto path = get_input2<std::string>("path");
+        auto img = readImageFile(path);
+        int h = img->userData().get2<int>("h");
+        int w = img->userData().get2<int>("w");
+        int maxi = 0;
+
+        float maxv = zeno::dot(img->verts[0], zeno::vec3f(0.33, 0.33, 0.33));
+        for (auto i = 1; i < img->size(); i++) {
+            float value = zeno::dot(img->verts[i], zeno::vec3f(0.33, 0.33, 0.33));
+            if (value > maxv) {
+                maxi = i;
+                maxv = value;
+            }
+        }
+        int x = maxi % w;
+        int y = h - 1 - maxi / w;
+
+        float rot_phi = x / float(w) * 360 + 180;
+        set_output2("rotation", rot_phi);
+
+        float rot_theta = y / float(h - 1) * 180;
+
+        auto dir = get_input2<zeno::vec3f>("dir");
+        dir = zeno::normalize(dir);
+        auto to_rot_theta = glm::degrees(acos(dir[1]));
+        auto diff_rot_theta = to_rot_theta - rot_theta;
+
+        float rot_phi2 = glm::degrees(atan2(dir[2], dir[0]));
+        set_output2("rotation3d", vec3f(0, -rot_phi2, diff_rot_theta));
+    }
+};
+ZENDEFNODE(EnvMapRot, {
+    {
+        {"readpath", "path", ""},
+        {"vec3f", "dir", "1, 1, 1"},
+    },
+    {
+        {"float", "rotation"},
+        {"vec3f", "rotation3d"},
+    },
+    {},
+    {"comp"},
+});
+
+struct PrimLoadExrToChannel : INode {
+    void apply() override {
+        auto path = get_input2<std::string>("path");
+        auto image = readExrFile(path);
+        int h = image->userData().get2<int>("h");
+        int w = image->userData().get2<int>("w");
+
+        auto prim = get_input<PrimitiveObject>("prim");
+        if (w * h != prim->size()) {
+            throw zeno::makeError("PrimLoadExrToChannel image prim w and h not match!");
+        }
+        auto &channel = prim->add_attr<zeno::vec3f>(get_input2<std::string>("channel"));
+        for (auto i = 0; i < w * h; i++) {
+            channel[i] = image->verts[i];
+        }
+
+        set_output2("output", prim);
+    }
+};
+
+ZENDEFNODE(PrimLoadExrToChannel, {
+    {
+        {"readpath", "path", ""},
+        {"prim"},
+        {"string", "channel", "clr"},
+    },
+    {
+        {"output"},
     },
     {},
     {"comp"},

@@ -12,7 +12,10 @@
 #include <zenovis/opengl/buffer.h>
 #include <zenovis/opengl/common.h>
 #include <zenovis/opengl/scope.h>
-#include "../xinxinoptix/xinxinoptixapi.h"
+#ifdef ZENO_ENABLE_OPTIX
+    #include "../xinxinoptix/xinxinoptixapi.h"
+#endif
+//#include <magic_enum.hpp>
 #include <cstdlib>
 #include <map>
 
@@ -46,6 +49,34 @@ Scene::Scene()
         switchRenderEngine("bate");
 }
 
+void Scene::cleanupView()
+{
+    if (!renderMan)
+        return;
+
+    RenderEngine* pEngine = renderMan->getEngine();
+    if (pEngine) {
+        pEngine->cleanupWhenExit();
+    }
+}
+
+void Scene::cleanUpScene()
+{
+        zeno::getSession().globalComm->clear_objects([this](){
+            if (objectsMan)
+                objectsMan->clear_objects();
+
+            if (!renderMan)
+                return;
+
+            RenderEngine* pEngine = renderMan->getEngine();
+            if (pEngine) {
+                pEngine->update();
+                pEngine->cleanupAssets();
+            }
+        });
+}
+
 void Scene::switchRenderEngine(std::string const &name) {
     renderMan->switchDefaultEngine(name);
 }
@@ -57,29 +88,6 @@ void* Scene::getOptixImg(int& w, int& h)
 #else
     return nullptr;
 #endif
-}
-
-std::vector<float> Scene::getCameraProp(){
-    std::vector<float> camProp;
-    camProp.push_back(this->camera->m_lodcenter.x);
-    camProp.push_back(this->camera->m_lodcenter.y);
-    camProp.push_back(this->camera->m_lodcenter.z);
-    camProp.push_back(this->camera->m_lodfront.x);
-    camProp.push_back(this->camera->m_lodfront.y);
-    camProp.push_back(this->camera->m_lodfront.z);
-    camProp.push_back(this->camera->m_lodup.x);
-    camProp.push_back(this->camera->m_lodup.y);
-    camProp.push_back(this->camera->m_lodup.z);
-    camProp.push_back(this->camera->m_fov);
-    camProp.push_back(this->camera->m_aperture);
-    camProp.push_back(this->camera->focalPlaneDistance);
-    camProp.push_back(this->camera->m_zxx.cx);
-    camProp.push_back(this->camera->m_zxx.cy);
-    camProp.push_back(this->camera->m_zxx.cz);
-    camProp.push_back(this->camera->m_zxx.theta);
-    camProp.push_back(this->camera->m_zxx.phi);
-    camProp.push_back(this->camera->m_zxx.radius);
-    return camProp;
 }
 
 bool Scene::cameraFocusOnNode(std::string const &nodeid, zeno::vec3f &center, float &radius) {
@@ -95,23 +103,27 @@ bool Scene::cameraFocusOnNode(std::string const &nodeid, zeno::vec3f &center, fl
 bool Scene::loadFrameObjects(int frameid) {
     auto &ud = zeno::getSession().userData();
     ud.set2<int>("frameid", std::move(frameid));
-    bool inserted = false;
-    if (!zeno::getSession().globalComm->isFrameCompleted(frameid))
-        return inserted;
 
-    auto const *viewObjs = zeno::getSession().globalComm->getViewObjects(frameid);
-    if (viewObjs) {
-        zeno::log_trace("load_objects: {} objects at frame {}", viewObjs->size(), frameid);
-        inserted = this->objectsMan->load_objects(viewObjs->m_curr);
-    } else {
-        zeno::log_trace("load_objects: no objects at frame {}", frameid);
-        inserted = this->objectsMan->load_objects({});
-    }
+    const auto& cbLoadObjs = [this](std::map<std::string, std::shared_ptr<zeno::IObject>> const& objs) -> bool {
+        return this->objectsMan->load_objects(objs);
+    };
+    bool isFrameValid = false;
+    bool inserted = zeno::getSession().globalComm->load_objects(frameid, cbLoadObjs, isFrameValid);
+    if (!isFrameValid)
+        return false;
+
     renderMan->getEngine()->update();
     return inserted;
 }
 
-void Scene::draw() {
+void Scene::set_select_mode(PICK_MODE _select_mode) {
+//    zeno::log_info("{} -> {}", magic_enum::enum_name(select_mode), magic_enum::enum_name(_select_mode));
+    select_mode = _select_mode;
+}
+PICK_MODE Scene::get_select_mode() {
+    return select_mode;
+}
+void Scene::draw(bool record) {
     if (renderMan->getDefaultEngineName() != "optx")
     {
         //CHECK_GL(glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0));
@@ -121,7 +133,7 @@ void Scene::draw() {
     }
 
     zeno::log_trace("scene redraw {}x{}", camera->m_nx, camera->m_ny);
-    renderMan->getEngine()->draw();
+    renderMan->getEngine()->draw(record);
 }
 
 std::vector<char> Scene::record_frame_offline(int hdrSize, int rgbComps) {
@@ -141,8 +153,8 @@ std::vector<char> Scene::record_frame_offline(int hdrSize, int rgbComps) {
     bool bOptix = renderMan->getDefaultEngineName() == "optx";
     if (bOptix)
     {
-        draw();
-        return std::vector<char>();
+        draw(false);
+        return {};
     }
 
     std::vector<char> pixels(camera->m_nx * camera->m_ny * rgbComps * hdrSize);
@@ -163,7 +175,7 @@ std::vector<char> Scene::record_frame_offline(int hdrSize, int rgbComps) {
         CHECK_GL(glBindRenderbuffer(GL_RENDERBUFFER, rbo1));
         CHECK_GL(glRenderbufferStorageMultisample(GL_RENDERBUFFER, drawOptions->msaa_samples, GL_RGBA, camera->m_nx, camera->m_ny));
         CHECK_GL(glBindRenderbuffer(GL_RENDERBUFFER, rbo2));
-        CHECK_GL(glRenderbufferStorageMultisample(GL_RENDERBUFFER, drawOptions->msaa_samples, GL_DEPTH_COMPONENT32, camera->m_nx, camera->m_ny));
+        CHECK_GL(glRenderbufferStorageMultisample(GL_RENDERBUFFER, drawOptions->msaa_samples, GL_DEPTH_COMPONENT32F, camera->m_nx, camera->m_ny));
         CHECK_GL(glBindRenderbuffer(GL_RENDERBUFFER, 0));
 
         CHECK_GL(glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo1));
@@ -174,7 +186,7 @@ std::vector<char> Scene::record_frame_offline(int hdrSize, int rgbComps) {
 
         {
             auto bindDrawBuf = opengl::scopeGLDrawBuffer(GL_COLOR_ATTACHMENT0);
-            draw();
+            draw(true);
         }
 
         if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
@@ -187,7 +199,7 @@ std::vector<char> Scene::record_frame_offline(int hdrSize, int rgbComps) {
             CHECK_GL(glBindRenderbuffer(GL_RENDERBUFFER, srbo1));
             CHECK_GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA, nx, ny));
             CHECK_GL(glBindRenderbuffer(GL_RENDERBUFFER, srbo2));
-            CHECK_GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32, nx, ny));
+            CHECK_GL(glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, nx, ny));
 
             auto bindReadSFbo = opengl::scopeGLBindFramebuffer(GL_DRAW_FRAMEBUFFER, sfbo);
             CHECK_GL(glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER,

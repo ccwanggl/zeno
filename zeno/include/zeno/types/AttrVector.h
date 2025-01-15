@@ -20,7 +20,13 @@ using AttrAcceptAll = std::variant
     , vec4i
     >;
 
+struct AttrVectorIndex {
+    size_t attrIndex = 0;
+    size_t elementIndex = 0;
+    size_t attrDim = 1;
+};
 
+// AttrVector = BaseVector + attrs
 template <class ValT>
 struct AttrVector {
     using AttrVectorVariant = std::variant
@@ -284,6 +290,67 @@ struct AttrVector {
 #endif
     */
 
+    template<class T>
+    size_t type_dim() const {
+        if constexpr (is_vec_v<T>) {
+            return is_vec_n<T>;
+        }
+        else {
+            return 1;
+        }
+    }
+
+    size_t total_dim() const {
+        size_t dim = 0;
+        // base
+        dim += type_dim<value_type>();
+        // attr
+        for (auto& [key, arr] : attrs) {
+            auto const& k = key;
+            std::visit([&](auto& arr) {
+                using T = std::decay_t<decltype(arr[0])>;
+                if constexpr (variant_contains<T, AttrAcceptAll>::value) {
+                    dim += type_dim<T>();
+                }
+            }, arr);
+        }
+        return dim;
+    }
+
+    AttrVectorIndex attr_index(size_t index) const {
+        size_t attrIndex = 0;
+        size_t elementIndex = 0;
+        size_t attrDim = type_dim<value_type>();
+        size_t dim = 0;
+        // base
+        dim += type_dim<value_type>();
+        if (index < dim) {
+            return { attrIndex, index % dim, attrDim };
+        }
+        attrIndex++;
+        // attr
+        // attr is std::map, it's sorted, so here attrIndex++ is right.
+        for (auto& [key, arr] : attrs) {
+            auto const& k = key;
+            std::visit([&](auto& arr) {
+                using T = std::decay_t<decltype(arr[0])>;
+                if constexpr (variant_contains<T, AttrAcceptAll>::value) {
+                    auto current_dim = type_dim<T>();
+                    if (index < dim + current_dim) {
+                        elementIndex = (index - dim) % current_dim;
+                        attrDim = current_dim;
+                    }
+                    dim += current_dim;
+                }
+            }, arr);
+            if (index < dim) {
+                break;
+            }
+            attrIndex++;
+        }
+        return { attrIndex, elementIndex, attrDim };
+    }
+
     template <class Accept = std::variant<vec3f, float>>
     size_t num_attrs() const {
         if constexpr (std::is_same_v<Accept, AttrAcceptAll>) {
@@ -370,8 +437,8 @@ struct AttrVector {
         //means like attr<T>.emplace_back(val)
         //suppose "pos" = {}
         //        "clr" = {}
-        //attr<vec3f>("clr").emplace_back(val)
-        //attr<vec3f>("pos").emplace_back(val)<---this will resize "clr" to zero first and then push_back to "pos"
+        //attr<zeno::vec3f>("clr").emplace_back(val)
+        //attr<zeno::vec3f>("pos").emplace_back(val)<---this will resize "clr" to zero first and then push_back to "pos"
         //_ensure_update();
         auto it = attrs.find(name);
         if (it == attrs.end())
@@ -431,6 +498,7 @@ struct AttrVector {
         for (auto &[key, val] : attrs) {
             std::visit([&](auto &val) { val.resize(size); }, val);
         }
+        shrink_to_fit();
     }
 
     void clear() {
@@ -438,6 +506,10 @@ struct AttrVector {
         for (auto &[key, val] : attrs) {
             std::visit([&](auto &val) { val.clear(); }, val);
         }
+    }
+    void clear_with_attr() {
+        values.clear();
+        attrs = {};
     }
 };
 

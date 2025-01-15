@@ -140,6 +140,7 @@ btVector3 vecInv(const btVector3 &v) {
 }
 
 #define DEBUG_CPD 1
+#define DEBUG_DISPLAY 0
 
 struct BulletGlueRigidBodies : zeno::INode {
     virtual void apply() override {
@@ -390,6 +391,9 @@ struct BulletUpdateCpdChildPrimTrans : zeno::INode {
         constexpr auto space = execspace_e::openmp;
         auto pol = omp_exec();
 
+        std::shared_ptr<ListObject> initialPrimList;
+        auto translationList = std::make_shared<ListObject>();
+        auto rotationList = std::make_shared<ListObject>();
 #if DEBUG_CPD
         auto centerlist = std::make_shared<ListObject>();
         auto minlist = std::make_shared<ListObject>();
@@ -406,9 +410,12 @@ struct BulletUpdateCpdChildPrimTrans : zeno::INode {
         std::shared_ptr<ListObject> primlist;
         std::vector<std::shared_ptr<PrimitiveObject>> visPrims;
         if (hasVisualPrimlist) {
+            // initialPrimList = cpdList->userData().get<ListObject>("initialPrimlist");
             primlist = cpdList->userData().get<ListObject>("visualPrimlist");
             visPrims = primlist->get<PrimitiveObject>();
         } else {
+            initialPrimList = std::make_shared<ListObject>();
+            cpdList->userData().set("initialPrimlist", initialPrimList);
             primlist = std::make_shared<ListObject>();
             cpdList->userData().set("visualPrimlist", primlist);
         }
@@ -451,9 +458,13 @@ struct BulletUpdateCpdChildPrimTrans : zeno::INode {
                     dstPos[i] = zeno::other_to_vec<3>(p);
                 });
 
-                if (!hasVisualPrimlist)
+                if (!hasVisualPrimlist) {
+                    initialPrimList->arr.push_back(prim);
                     primlist->arr.push_back(visPrim);
+                }
 
+                translationList->arr.push_back(std::make_shared<NumericObject>(translate));
+                rotationList->arr.push_back(std::make_shared<NumericObject>(rotation)); // x, y, z, w
 #if DEBUG_CPD
                 centerlist->arr.push_back(std::make_shared<NumericObject>(other_to_vec<3>(rbTrans.getOrigin())));
                 btVector3 aabbMin, aabbMax;
@@ -529,12 +540,20 @@ struct BulletUpdateCpdChildPrimTrans : zeno::INode {
                     dstPos[i] = zeno::other_to_vec<3>(p);
                 });
 
-                if (!hasVisualPrimlist)
+                if (!hasVisualPrimlist) {
+                    initialPrimList->arr.push_back(prim);
                     primlist->arr.push_back(visPrim);
+                }
+
+                translationList->arr.push_back(std::make_shared<NumericObject>(translate));
+                rotationList->arr.push_back(std::make_shared<NumericObject>(rotation)); // x, y, z, w
             }
         }
 
         set_output("primList", primlist);
+        set_output("initialPrimList", initialPrimList);
+        set_output("translationList", translationList);
+        set_output("rotationList", rotationList);
 #if DEBUG_CPD
         set_output("centerList", centerlist);
         set_output("minList", minlist);
@@ -550,6 +569,9 @@ ZENDEFNODE(BulletUpdateCpdChildPrimTrans, {
                                               },
                                               {
                                                   "primList",
+                                                  "initialPrimList",
+                                                  "translationList",
+                                                  "rotationList",
                                                   "centerList",
                                                   "minList",
                                                   "maxList",
@@ -605,11 +627,11 @@ struct BulletObjectSetVel : zeno::INode {
         auto body = obj->body.get();
 
         if (has_input("linearVel")) {
-            auto v = get_input2<vec3f>("linearVel");
+            auto v = get_input2<zeno::vec3f>("linearVel");
             body->setLinearVelocity(vec_to_other<btVector3>(v));
         }
         if (has_input("angularVel")) {
-            auto v = get_input2<vec3f>("angularVel");
+            auto v = get_input2<zeno::vec3f>("angularVel");
             body->setAngularVelocity(vec_to_other<btVector3>(v));
         }
 
@@ -1024,17 +1046,36 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         ///
         ///
         /// @note does not allow duplicate entries
-        auto comp = [](const std::shared_ptr<BulletObject> &a, const std::shared_ptr<BulletObject> &b) {
-            return (std::uintptr_t)a.get() < (std::uintptr_t)b.get();
-        };
-        std::sort(std::begin(rbs), std::end(rbs), comp);
-        auto find_id = [&rbs, nrbs](const BulletObject *target) {
+        // auto comp = [](const std::shared_ptr<BulletObject> &a, const std::shared_ptr<BulletObject> &b) {
+        //     return (std::uintptr_t)a.get() < (std::uintptr_t)b.get();
+        // };
+        // std::sort(std::begin(rbs), std::end(rbs), comp);
+        std::vector<int> rbIndices(nrbs);
+        std::vector<std::pair<BulletObject *, int>> kvs(nrbs);
+        {
+            pol(enumerate(rbs, kvs),
+                [](int id, auto key, std::pair<BulletObject *, int> &kv) { kv = std::make_pair(key.get(), id); });
+            struct {
+                constexpr bool operator()(const std::pair<BulletObject *, int> &a,
+                                          const std::pair<BulletObject *, int> &b) const {
+                    return a.first < b.first;
+                }
+            } lessOp;
+            std::sort(kvs.begin(), kvs.end(), lessOp);
+            // sort rbs (ptr) in ascending order
+            pol(enumerate(kvs), [&rbIndices /*, &rbs*/](int no, auto kv) {
+                rbIndices[no] = kv.second;
+                // rbs[no] = kv.first;
+            });
+        }
+
+        auto find_id = [&rbs = kvs, nrbs](const BulletObject *target) {
             int st = 0, ed = nrbs - 1, mid;
             while (ed >= st) {
                 mid = st + (ed - st) / 2;
-                if (target == rbs[mid].get())
+                if (target == rbs[mid].first)
                     return mid;
-                if (target < rbs[mid].get())
+                if (target < rbs[mid].first)
                     ed = mid - 1;
                 else
                     st = mid + 1;
@@ -1050,8 +1091,8 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         std::vector<int> consJs(ncons); // might contain -1 when unary constraints exist
         for (std::size_t k = 0; k != ncons; ++k) {
             auto &rel = relationships[k];
-            auto i = find_id(rel->rb0);
-            auto j = find_id(rel->rb1);
+            auto i = rbIndices[find_id(rel->rb0)];
+            auto j = rbIndices[find_id(rel->rb1)];
             consIs[k] = i;
             consJs[k] = j;
             if (rel->isGlueConstraint()) {
@@ -1079,16 +1120,36 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         auto ncompounds = tab.size();
         std::vector<int> cpdSizes(ncompounds);
 
+        ///
+        /// sort compounds upon minimum index within
+        ///
+        std::vector<int> fwdMap(ncompounds);
+        {
+            std::vector<std::pair<int, int>> kvs(ncompounds);
+            auto keys = tab._activeKeys;
+            pol(enumerate(keys, kvs),
+                [](int id, auto key, std::pair<int, int> &kv) { kv = std::make_pair(key[0], id); });
+            struct {
+                constexpr bool operator()(const std::pair<int, int> &a, const std::pair<int, int> &b) const {
+                    return a.first < b.first;
+                }
+            } lessOp;
+            std::sort(kvs.begin(), kvs.end(), lessOp);
+            pol(enumerate(kvs), [&fwdMap](int no, auto kv) { fwdMap[kv.second] = no; });
+        }
+
         // map rigid body indices to target compound indices
         std::vector<int> rbDstCompId(nrbs);
-        pol(range(nrbs), [&fas, &rbDstCompId, &cpdSizes, tab = proxy<space>(tab)](int rbi) mutable {
+        pol(range(nrbs), [&fas, &rbDstCompId, &cpdSizes, &fwdMap, tab = proxy<space>(tab)](int rbi) mutable {
             auto fa = fas[rbi];
-            auto compId = tab.query(fa);
+            auto compId = fwdMap[tab.query(fa)];
             rbDstCompId[rbi] = compId;
             atomic_add(exec_omp, &cpdSizes[compId], 1);
         });
         pol(range(nrbs), [&rbDstCompId, &cpdSizes, &isRbCompound](int rbi) {
             auto compId = rbDstCompId[rbi];
+            // if (rbi < 10)
+            //     printf("rb[%d] belongs to cpd [%d]\n", rbi, (int)compId);
             isRbCompound[rbi] = cpdSizes[compId] > 1;
         });
 
@@ -1112,6 +1173,7 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
             fmt::print(fg(fmt::color::gold), "read (cpd)grouplist at [{}]\n",
                        (void *)rblist->userData().get<ListObject>("compounds").get());
 
+#if DEBUG_DISPLAY
             puts("previous rbs\' and compounds\' states");
 
             pol(prevGroups, [](auto cpd) {
@@ -1120,6 +1182,7 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
                 fmt::print(fg(fmt::color::orange), "cpd to-be-dismembered [{}] v<{}, {}, {}>, w<{}, {}, {}>.\n",
                            (void *)cpd.get(), v[0], v[1], v[2], w[0], w[1], w[2]);
             });
+#endif
 #endif
             /// TBD: update rigid body transforms if exit the compounds
             pol(range(nrbs), [&](int rbi) {
@@ -1180,31 +1243,30 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         /// @note isolated rigid bodies are delegated to this BulletObject list here!
         // determine compound or not pass on rbs that are does not belong in any compound
         std::vector<int> isCompound(ncompounds);
-        pol(range(nrbs), [&isCompound, &isRbCompound, &rbDstCompId, &fas, &rbs, tab = proxy<space>(tab),
-                          &groupList = groupList->arr](int rbi) mutable {
-            auto isRbCpd = isRbCompound[rbi];
-            auto compId = rbDstCompId[rbi];
-            if (isRbCpd)
-                isCompound[compId] = 1;
-            else
-                groupList[compId] = rbs[rbi];
-        });
+        pol(range(nrbs),
+            [&isCompound, &isRbCompound, &rbDstCompId, &fas, &rbs, &groupList = groupList->arr](int rbi) mutable {
+                auto isRbCpd = isRbCompound[rbi];
+                auto compId = rbDstCompId[rbi];
+                if (isRbCpd)
+                    isCompound[compId] = 1;
+                else
+                    groupList[compId] = rbs[rbi];
+            });
 
         std::vector<int> consMarks(ncons + 1); // 0: discard, 1: preserve
-        pol(range(ncons),
-            [&consMarks, &relationships, &rbDstCompId, &consIs, &consJs, &fas, tab = proxy<space>(tab)](int k) mutable {
-                auto &rel = relationships[k];
-                if (!rel->isGlueConstraint()) {
-                    if (rel->isUnaryConstraint())
-                        consMarks[k] = 1;
-                    else {
-                        auto compI = rbDstCompId[consIs[k]];
-                        auto compJ = rbDstCompId[consJs[k]];
-                        consMarks[k] = compI != compJ;
-                    }
-                } else
-                    consMarks[k] = 0;
-            });
+        pol(range(ncons), [&consMarks, &relationships, &rbDstCompId, &consIs, &consJs, &fas](int k) mutable {
+            auto &rel = relationships[k];
+            if (!rel->isGlueConstraint()) {
+                if (rel->isUnaryConstraint())
+                    consMarks[k] = 1;
+                else {
+                    auto compI = rbDstCompId[consIs[k]];
+                    auto compJ = rbDstCompId[consJs[k]];
+                    consMarks[k] = compI != compJ;
+                }
+            } else
+                consMarks[k] = 0;
+        });
 
         std::vector<int> consOffsets(ncons + 1);
         exclusive_scan(pol, std::begin(consMarks), std::end(consMarks), std::begin(consOffsets));
@@ -1243,9 +1305,8 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         std::vector<float> cpdFrictions(ncompounds);
         std::vector<float> cpdRestitutions(ncompounds);
         pol(enumerate(rbs), [&cpdMasses, &cpdLinearDampings, &cpdAngularDampings, &cpdFrictions, &cpdRestitutions, &fas,
-                             tab = proxy<space>(tab)](int rbi, const auto &rb) {
-            auto fa = fas[rbi];
-            auto compId = tab.query(fa);
+                             &rbDstCompId](int rbi, const auto &rb) {
+            auto compId = rbDstCompId[rbi];
             auto &body = rb->body;
             auto m = body->getMass();
             atomic_add(exec_omp, &cpdMasses[compId], m);
@@ -1270,10 +1331,9 @@ struct BulletMaintainRigidBodiesAndConstraints : zeno::INode {
         /// @note assemble shapes, masses
         std::vector<std::mutex> comLocks(ncompounds);
         std::vector<std::vector<btScalar>> cpdChildMasses(ncompounds);
-        pol(range(nrbs), [&, tab = proxy<space>(tab)](int rbi) mutable {
+        pol(range(nrbs), [&](int rbi) mutable {
             std::unique_ptr<btRigidBody> &bodyPtr = rbs[rbi]->body;
-            auto fa = fas[rbi];
-            auto compId = tab.query(fa);
+            auto compId = rbDstCompId[rbi];
             if (isCompound[compId]) {
                 std::lock_guard<std::mutex> guard(comLocks[compId]);
                 auto &cpdPtr = btCpdShapes[compId];

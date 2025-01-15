@@ -21,13 +21,13 @@ struct ZSGridPerlinNoise : INode {
         auto zsSPG = get_input<ZenoSparseGrid>("SparseGrid");
         auto attrTag = get_input2<std::string>("GridAttribute");
         auto opType = get_input2<std::string>("OpType");
-        auto frequency = get_input2<vec3f>("Frequency");
-        auto offset = get_input2<vec3f>("Offset");
+        auto frequency = get_input2<zeno::vec3f>("Frequency");
+        auto offset = get_input2<zeno::vec3f>("Offset");
         auto roughness = get_input2<float>("Roughness");
         auto turbulence = get_input2<int>("Turbulence");
         auto amplitude = get_input2<float>("Amplitude");
         auto attenuation = get_input2<float>("Attenuation");
-        auto mean = get_input2<vec3f>("MeanNoise");
+        auto mean = get_input2<zeno::vec3f>("MeanNoise");
 
         bool isAccumulate = opType == "accumulate" ? true : false;
 
@@ -37,7 +37,7 @@ struct ZSGridPerlinNoise : INode {
         auto block_cnt = spg.numBlocks();
 
         if (!spg.hasProperty(tag))
-            throw std::runtime_error(fmt::format("GridAttribute [{}] doesn't exist!", tag.asString()));
+            throw std::runtime_error(fmt::format("GridAttribute [{}] doesn't exist!", tag));
         const int nchns = spg.getPropertySize(tag);
 
         auto pol = zs::cuda_exec();
@@ -115,12 +115,12 @@ struct ZSGridCurlNoise : INode {
         auto attrTag = get_input2<std::string>("GridAttribute");
         bool isStaggered = get_input2<bool>("staggered");
         auto opType = get_input2<std::string>("OpType");
-        auto frequency = get_input2<vec3f>("Frequency");
-        auto offset = get_input2<vec3f>("Offset");
+        auto frequency = get_input2<zeno::vec3f>("Frequency");
+        auto offset = get_input2<zeno::vec3f>("Offset");
         auto roughness = get_input2<float>("Roughness");
         auto turbulence = get_input2<int>("Turbulence");
         auto amplitude = get_input2<float>("Amplitude");
-        auto mean = get_input2<vec3f>("MeanNoise");
+        auto mean = get_input2<zeno::vec3f>("MeanNoise");
 
         bool isAccumulate = opType == "accumulate" ? true : false;
 
@@ -130,9 +130,9 @@ struct ZSGridCurlNoise : INode {
         auto block_cnt = spg.numBlocks();
 
         if (!spg.hasProperty(tag))
-            throw std::runtime_error(fmt::format("GridAttribute [{}] doesn't exist!", tag.asString()));
+            throw std::runtime_error(fmt::format("GridAttribute [{}] doesn't exist!", tag));
         if (spg.getPropertySize(tag) != 3)
-            throw std::runtime_error(fmt::format("GridAttribute [{}] must have 3 channels!", tag.asString()));
+            throw std::runtime_error(fmt::format("GridAttribute [{}] must have 3 channels!", tag));
 
         auto pol = zs::cuda_exec();
         constexpr auto space = zs::execspace_e::cuda;

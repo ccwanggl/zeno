@@ -283,6 +283,7 @@ struct FrameBufferPicker : IPicker {
         CHECK_GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
 
         // construct prim set
+        // use focus_prim if focus_prim_name is not empty else all prims
         vector<std::pair<string, std::shared_ptr<zeno::IObject>>> prims;
         auto prims_shared = scene->objectsMan->pairsShared();
         if (!focus_prim_name.empty()) {
@@ -303,16 +304,12 @@ struct FrameBufferPicker : IPicker {
             if (prim && prim->has_attr("pos")) {
                 // prepare vertices data
                 auto const &pos = prim->attr<zeno::vec3f>("pos");
-                auto vertex_count = prim->size();
-                vector<vec3f> mem(vertex_count);
-                for (int i = 0; i < vertex_count; i++)
-                    mem[i] = pos[i];
                 vao->bind();
-                vbo->bind_data(mem.data(), mem.size() * sizeof(mem[0]));
+                vbo->bind_data(pos.data(), pos.size() * sizeof(pos[0]));
                 vbo->attribute(0, sizeof(float) * 0, sizeof(float) * 3, GL_FLOAT, 3);
 
                 bool pick_particle = false;
-                if (scene->select_mode == zenovis::PICK_OBJECT) {
+                if (scene->get_select_mode() == PICK_MODE::PICK_OBJECT) {
                     pick_particle = prim->tris->empty() && prim->quads->empty() && prim->polys->empty() && prim->loops->empty();
                     CHECK_GL(glEnable(GL_DEPTH_TEST));
                     CHECK_GL(glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE));
@@ -324,13 +321,29 @@ struct FrameBufferPicker : IPicker {
                     scene->camera->set_program_uniforms(obj_shader);
                     CHECK_GL(glUniform1ui(glGetUniformLocation(obj_shader->pro, "gObjectIndex"), id + 1));
                     // draw prim
-                    ebo->bind_data(prim->tris.data(), prim->tris.size() * sizeof(prim->tris[0]));
-                    CHECK_GL(glDrawElements(GL_TRIANGLES, prim->tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    if (prim->tris.size()) {
+                        ebo->bind_data(prim->tris.data(), prim->tris.size() * sizeof(prim->tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, prim->tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
+                    else if (prim->polys.size()) {
+                        std::vector<vec3i> tris;
+                        for (auto [start, len]: prim->polys) {
+                            for (auto i = 2; i < len; i++) {
+                                tris.emplace_back(
+                                    prim->loops[start],
+                                    prim->loops[start + i - 1],
+                                    prim->loops[start + i]
+                                );
+                            }
+                        }
+                        ebo->bind_data(tris.data(), tris.size() * sizeof(tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
                     ebo->unbind();
                     CHECK_GL(glDisable(GL_DEPTH_TEST));
                 }
 
-                if (scene->select_mode == zenovis::PICK_VERTEX || pick_particle) {
+                if (scene->get_select_mode() == PICK_MODE::PICK_VERTEX || pick_particle) {
                     // ----- enable depth test -----
                     CHECK_GL(glEnable(GL_DEPTH_TEST));
                     CHECK_GL(glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE));
@@ -342,23 +355,39 @@ struct FrameBufferPicker : IPicker {
                     vert_shader->use();
                     scene->camera->set_program_uniforms(vert_shader);
                     CHECK_GL(glUniform1ui(glGetUniformLocation(vert_shader->pro, "gObjectIndex"), id + 1));
-                    CHECK_GL(glDrawArrays(GL_POINTS, 0, mem.size()));
+                    CHECK_GL(glDrawArrays(GL_POINTS, 0, pos.size()));
 
                     // ----- draw object to cover invisible points -----
                     empty_and_offset_shader->use();
-                    empty_and_offset_shader->set_uniform("offset", 0.00001f);
+                    empty_and_offset_shader->set_uniform("offset", -0.00001f);
                     scene->camera->set_program_uniforms(empty_and_offset_shader);
 
-                    auto tri_count = prim->tris.size();
-                    ebo->bind_data(prim->tris.data(), tri_count * sizeof(prim->tris[0]));
-                    CHECK_GL(glDrawElements(GL_TRIANGLES, tri_count * 3, GL_UNSIGNED_INT, 0));
+                    // draw prim
+                    if (prim->tris.size()) {
+                        ebo->bind_data(prim->tris.data(), prim->tris.size() * sizeof(prim->tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, prim->tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
+                    else if (prim->polys.size()) {
+                        std::vector<vec3i> tris;
+                        for (auto [start, len]: prim->polys) {
+                            for (auto i = 2; i < len; i++) {
+                                tris.emplace_back(
+                                        prim->loops[start],
+                                        prim->loops[start + i - 1],
+                                        prim->loops[start + i]
+                                );
+                            }
+                        }
+                        ebo->bind_data(tris.data(), tris.size() * sizeof(tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
                     ebo->unbind();
 
                     // ----- disable depth test -----
                     CHECK_GL(glDisable(GL_DEPTH_TEST));
                 }
 
-                if (scene->select_mode == zenovis::PICK_LINE) {
+                if (scene->get_select_mode() == PICK_MODE::PICK_LINE) {
                     // ----- enable depth test -----
                     CHECK_GL(glEnable(GL_DEPTH_TEST));
                     CHECK_GL(glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE));
@@ -401,15 +430,31 @@ struct FrameBufferPicker : IPicker {
                     // ----- draw object to cover invisible lines -----
                     empty_shader->use();
                     scene->camera->set_program_uniforms(empty_shader);
-                    auto tri_count = prim->tris.size();
-                    ebo->bind_data(prim->tris.data(), tri_count * sizeof(prim->tris[0]));
-                    CHECK_GL(glDrawElements(GL_TRIANGLES, tri_count * 3, GL_UNSIGNED_INT, 0));
+                    // draw prim
+                    if (prim->tris.size()) {
+                        ebo->bind_data(prim->tris.data(), prim->tris.size() * sizeof(prim->tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, prim->tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
+                    else if (prim->polys.size()) {
+                        std::vector<vec3i> tris;
+                        for (auto [start, len]: prim->polys) {
+                            for (auto i = 2; i < len; i++) {
+                                tris.emplace_back(
+                                        prim->loops[start],
+                                        prim->loops[start + i - 1],
+                                        prim->loops[start + i]
+                                );
+                            }
+                        }
+                        ebo->bind_data(tris.data(), tris.size() * sizeof(tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
                     ebo->unbind();
                     // ----- disable depth test -----
                     CHECK_GL(glDisable(GL_DEPTH_TEST));
                 }
 
-                if (scene->select_mode == zenovis::PICK_MESH) {
+                if (scene->get_select_mode() == PICK_MODE::PICK_MESH) {
                     // ----- enable depth test -----
                     CHECK_GL(glEnable(GL_DEPTH_TEST));
                     CHECK_GL(glClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE));
@@ -420,9 +465,25 @@ struct FrameBufferPicker : IPicker {
                     prim_shader->use();
                     scene->camera->set_program_uniforms(prim_shader);
                     CHECK_GL(glUniform1ui(glGetUniformLocation(prim_shader->pro, "gObjectIndex"), id + 1));
-                    auto tri_count = prim->tris.size();
-                    ebo->bind_data(prim->tris.data(), tri_count * sizeof(prim->tris[0]));
-                    CHECK_GL(glDrawElements(GL_TRIANGLES, tri_count * 3, GL_UNSIGNED_INT, 0));
+                    // draw prim
+                    if (prim->tris.size()) {
+                        ebo->bind_data(prim->tris.data(), prim->tris.size() * sizeof(prim->tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, prim->tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
+                    else if (prim->polys.size()) {
+                        std::vector<vec3i> tris;
+                        for (auto [start, len]: prim->polys) {
+                            for (auto i = 2; i < len; i++) {
+                                tris.emplace_back(
+                                        prim->loops[start],
+                                        prim->loops[start + i - 1],
+                                        prim->loops[start + i]
+                                );
+                            }
+                        }
+                        ebo->bind_data(tris.data(), tris.size() * sizeof(tris[0]));
+                        CHECK_GL(glDrawElements(GL_TRIANGLES, tris.size() * 3, GL_UNSIGNED_INT, 0));
+                    }
                     ebo->unbind();
                     // ----- disable depth test -----
                     CHECK_GL(glDisable(GL_DEPTH_TEST));
@@ -480,7 +541,7 @@ struct FrameBufferPicker : IPicker {
         fbo->unbind();
 
         string result;
-        if (scene->select_mode == zenovis::PICK_OBJECT) {
+        if (scene->get_select_mode() == PICK_MODE::PICK_OBJECT) {
             if (!pixel.has_object() || !id_table.count(pixel.obj_id)) return "";
             result = id_table[pixel.obj_id];
         }
@@ -533,7 +594,7 @@ struct FrameBufferPicker : IPicker {
         fbo->unbind();
 
         string result;
-        if (scene->select_mode == zenovis::PICK_OBJECT) {
+        if (scene->get_select_mode() == PICK_MODE::PICK_OBJECT) {
             unordered_set<unsigned int> selected_obj;
             // fetch selected objects' ids
             for (int i = 0; i < pixel_count; i++) {

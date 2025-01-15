@@ -6,6 +6,7 @@
 #include "zeno/utils/UserData.h"
 #include "zassert.h"
 #include "settings/zsettings.h"
+#include <zenoui/comctrl/zpathedit.h>
 
 
 ZRecordVideoDlg::ZRecordVideoDlg(QWidget* parent)
@@ -14,25 +15,43 @@ ZRecordVideoDlg::ZRecordVideoDlg(QWidget* parent)
     m_ui = new Ui::RecordVideoDlg;
     m_ui->setupUi(this);
 
-    QSettings settings(QSettings::UserScope, zsCompanyName, zsEditor);
-    settings.beginGroup("recInfo");
+    const RECORD_SETTING& info = zenoApp->graphsManagment()->recordSettings();
     m_ui->fps->setValidator(new QIntValidator);
-    m_ui->fps->setText(settings.value("fps").isValid() ? settings.value("fps").toString() : "24");
+    m_ui->fps->setText(QString::number(info.fps));
     m_ui->bitrate->setValidator(new QIntValidator);
-    m_ui->bitrate->setText(settings.value("bitrate").isValid() ? settings.value("bitrate").toString() : "200000");
+    m_ui->bitrate->setText(QString::number(info.bitrate));
     m_ui->lineWidth->setValidator(new QIntValidator);
-    m_ui->lineWidth->setText(settings.value("width").isValid() ? settings.value("width").toString() : "1280");
+    m_ui->lineWidth->setText(QString::number(info.width));
     m_ui->lineHeight->setValidator(new QIntValidator);
-    m_ui->lineHeight->setText(settings.value("height").isValid() ? settings.value("height").toString() : "720");
+    m_ui->lineHeight->setText(QString::number(info.height));
     m_ui->msaaSamplerNumber->setValidator(new QIntValidator);
-    m_ui->msaaSamplerNumber->setText(settings.value("numMSAA").isValid() ? settings.value("numMSAA").toString() : "0");
+    m_ui->msaaSamplerNumber->setText(QString::number(info.numMSAA));
     m_ui->optixSamplerNumber->setValidator(new QIntValidator);
-    m_ui->optixSamplerNumber->setText(settings.value("numOptix").isValid() ? settings.value("numOptix").toString() : "1");
-    settings.endGroup();
+    m_ui->optixSamplerNumber->setText(QString::number(info.numOptix));
+    m_ui->cbRemoveAfterRender->setChecked(info.bAutoRemoveCache);
+    m_ui->cbExportVideo->setChecked(info.bExportVideo);
+    m_ui->cbNeedDenoise->setChecked(info.needDenoise);
+    m_ui->linePath->setText(info.record_path);
+    m_ui->lineName->setText(info.videoname);;
+    m_ui->cbAOV->setChecked(info.bAov);
+    m_ui->cbMask->setChecked(info.bMask);
+    m_ui->cbExportEXR->setChecked(info.bExr);
 
-    m_ui->cbRemoveAfterRender->setCheckState(Qt::Unchecked);
     m_ui->cbPresets->addItems({"540P", "720P", "1080P", "2K", "4K"});
     m_ui->cbPresets->setCurrentIndex(1);
+    CALLBACK_SWITCH cbSwitch = [=](bool bOn) {
+        zenoApp->getMainWindow()->setInDlgEventLoop(bOn); //deal with ubuntu dialog slow problem when update viewport.
+    };
+    m_exePath = new ZPathEdit(cbSwitch, this);
+    m_exePath->setProperty("control", CONTROL_READPATH);
+    m_exePath->setText(info.exePath);
+    m_ui->m_sendToServerWidget->layout()->addWidget(m_exePath);
+    m_ui->m_sendToServerWidget->hide();
+
+    QSettings settings(zsCompanyName, zsEditor);
+    bool enableCache = settings.value("zencache-enable").isValid() ? settings.value("zencache-enable").toBool() : true;
+    if (!enableCache)
+        m_ui->cbRemoveAfterRender->setVisible(false);
 
     connect(m_ui->cbPresets, &QComboBox::currentTextChanged, this, [=](auto res) {
         auto v = std::map<QString, std::tuple<int, int>> {
@@ -56,12 +75,17 @@ ZRecordVideoDlg::ZRecordVideoDlg(QWidget* parent)
 
     connect(m_ui->btnGroup, SIGNAL(accepted()), this, SLOT(accept()));
     connect(m_ui->btnGroup, SIGNAL(rejected()), this, SLOT(reject()));
+    connect(m_ui->m_chkSendToServer, &QCheckBox::stateChanged, this, [&]() {
+        m_ui->m_sendToServerWidget->setVisible(m_ui->m_chkSendToServer->isChecked());
+    });
 }
 
 bool ZRecordVideoDlg::getInfo(VideoRecInfo &info)
 {
     auto &ud = zeno::getSession().userData();
     ud.set2("output_aov", m_ui->cbAOV->checkState() == Qt::Checked);
+    ud.set2("output_mask", m_ui->cbMask->checkState() == Qt::Checked);
+    ud.set2("output_exr", m_ui->cbExportEXR->checkState() == Qt::Checked);
     auto &path = info.record_path;
     auto &fn = info.videoname;
     info.fps = m_ui->fps->text().toInt();
@@ -72,8 +96,15 @@ bool ZRecordVideoDlg::getInfo(VideoRecInfo &info)
     info.res[1] = m_ui->lineHeight->text().toFloat();
     path = m_ui->linePath->text();
     info.bExportVideo = m_ui->cbExportVideo->checkState() == Qt::Checked;
+    info.bExportEXR = m_ui->cbExportEXR->checkState() == Qt::Checked;
     info.needDenoise = m_ui->cbNeedDenoise->checkState() == Qt::Checked;
     info.bAutoRemoveCache = m_ui->cbRemoveAfterRender->checkState() == Qt::Checked;
+    info.bSendToServer = m_ui->m_chkSendToServer->checkState() == Qt::Checked;
+    if (info.bSendToServer)
+    {
+        info.exePath = m_exePath->text();
+        info.taskName = m_ui->m_taskName->text();
+    }
     if (path.isEmpty())
     {
         QTemporaryDir dir;
@@ -99,14 +130,24 @@ bool ZRecordVideoDlg::getInfo(VideoRecInfo &info)
         }
         fn += suffix;
     }
-    QSettings settings(QSettings::UserScope, zsCompanyName, zsEditor);
-    settings.beginGroup("recInfo");
-    settings.setValue("fps", info.fps);
-    settings.setValue("bitrate", info.bitrate);
-    settings.setValue("numMSAA", info.numMSAA);
-    settings.setValue("numOptix", info.numOptix);
-    settings.setValue("width", info.res[0]);
-    settings.setValue("height", info.res[1]);
-    settings.endGroup();
+    RECORD_SETTING record_settings;
+    record_settings.record_path = m_ui->linePath->text();
+    record_settings.videoname = m_ui->lineName->text();
+    record_settings.fps = info.fps;
+    record_settings.bitrate = info.bitrate;
+    record_settings.numMSAA = info.numMSAA;
+    record_settings.numOptix = info.numOptix;
+    record_settings.width = info.res[0];
+    record_settings.height = info.res[1];
+    record_settings.bExportVideo = info.bExportVideo;
+    record_settings.needDenoise = info.needDenoise;
+    record_settings.bAutoRemoveCache = info.bAutoRemoveCache;
+    record_settings.bAov = m_ui->cbAOV->checkState() == Qt::Checked;
+    record_settings.bMask = m_ui->cbMask->checkState() == Qt::Checked;
+    record_settings.bExr = info.bExportEXR;
+    record_settings.exePath = info.exePath;
+
+    zenoApp->graphsManagment()->setRecordSettings(record_settings);
+
     return true;
 }

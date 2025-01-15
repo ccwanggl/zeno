@@ -3,6 +3,7 @@
 #include "viewport/viewportwidget.h"
 #include "viewport/displaywidget.h"
 #include "viewport/optixviewport.h"
+#include "viewport/zoptixviewport.h"
 #include <zenovis/DrawOptions.h>
 #include <zeno/utils/format.h>
 #include <zeno/utils/log.h>
@@ -15,6 +16,8 @@
 #include "launch/corelaunch.h"
 #include <zeno/extra/GlobalStatus.h>
 #include <zeno/core/Session.h>
+#include <filesystem>
+
 
 RecordVideoMgr::RecordVideoMgr(QObject* parent)
     : QObject(parent)
@@ -39,10 +42,12 @@ void RecordVideoMgr::cancelRecord()
     disconnectSignal();
 
     DisplayWidget* pWid = qobject_cast<DisplayWidget*>(parent());
-    ZASSERT_EXIT(pWid);
+    if (!pWid)
+        return;
+
     if (!pWid->isGLViewport())
     {
-        ZOptixViewport* pView = pWid->optixViewport();
+        auto pView = pWid->optixViewport();
         ZASSERT_EXIT(pView);
         pView->cancelRecording(m_recordInfo);
     }
@@ -52,6 +57,12 @@ void RecordVideoMgr::cancelRecord()
         if (mainWin)
             mainWin->toggleTimelinePlay(false);
     }
+}
+
+void RecordVideoMgr::initRecordInfo(const VideoRecInfo& recInfo)
+{
+    m_recordInfo = recInfo;
+    m_currFrame = m_recordInfo.frameRange.first;
 }
 
 void RecordVideoMgr::setRecordInfo(const VideoRecInfo& recInfo)
@@ -79,10 +90,10 @@ void RecordVideoMgr::setRecordInfo(const VideoRecInfo& recInfo)
     if (!pWid->isGLViewport())
     {
         //we can only record on another thread, the optix worker thread.
-        ZOptixViewport *pView = pWid->optixViewport();
+        auto pView = pWid->optixViewport();
         ZASSERT_EXIT(pView);
-        bool ret = connect(pView, &ZOptixViewport::sig_frameRecordFinished, this, &RecordVideoMgr::frameFinished);
-        ret = connect(pView, &ZOptixViewport::sig_recordFinished, this, &RecordVideoMgr::endRecToExportVideo);
+        bool ret = connect(pView, SIGNAL(sig_frameRecordFinished(int)), this, SIGNAL(frameFinished(int)));
+        ret = connect(pView, SIGNAL(sig_recordFinished()), this, SLOT(endRecToExportVideo()));
     }
     else
     {
@@ -92,8 +103,17 @@ void RecordVideoMgr::setRecordInfo(const VideoRecInfo& recInfo)
     }
 }
 
-void RecordVideoMgr::endRecToExportVideo()
+VideoRecInfo RecordVideoMgr::getRecordInfo() const
 {
+    return m_recordInfo;
+}
+
+REC_RETURN_CODE RecordVideoMgr::endRecToExportVideo()
+{
+    if (m_recordInfo.bExportEXR) {
+        emit recordFinished(m_recordInfo.record_path);
+        return REC_NOERROR;
+    }
     // denoising
     if (m_recordInfo.needDenoise) {
         QString dir_path = m_recordInfo.record_path + "/P/";
@@ -108,7 +128,8 @@ void RecordVideoMgr::endRecToExportVideo()
             // jpg to pfm
             {
                 auto image = zeno::readImageFile(jpg_path);
-                write_pfm(pfm_path, image);
+                std::string native_pfm_path = std::filesystem::u8path(pfm_path).string();
+                write_pfm(native_pfm_path, image);
             }
 
             const auto albedo_pfm_path = jpg_path + ".albedo.pfm";
@@ -142,8 +163,10 @@ void RecordVideoMgr::endRecToExportVideo()
                 qDebug() << ret;
                 // pfm to jpg
                 if (ret == 0) {
-                    auto image = zeno::readPFMFile(pfm_dn_path);
-                    write_jpg(jpg_path, image);
+                    std::string native_pfm_dn_path = std::filesystem::u8path(pfm_dn_path).string();
+                    auto image = zeno::readPFMFile(native_pfm_dn_path);
+                    std::string native_jpg_path = std::filesystem::u8path(jpg_path).string();
+                    write_jpg(native_jpg_path, image);
                     QFile fileOrigin(QString::fromStdString(pfm_path));
                     if (fileOrigin.exists()) {
                         fileOrigin.remove();
@@ -161,7 +184,7 @@ void RecordVideoMgr::endRecToExportVideo()
     }
     if (!m_recordInfo.bExportVideo) {
         emit recordFinished(m_recordInfo.record_path);
-        return;
+        return REC_NO_RECORD_OPTION;
     }
     //Zenovis::GetInstance().blockSignals(false);
     {
@@ -192,33 +215,41 @@ void RecordVideoMgr::endRecToExportVideo()
                       .arg(outPath)
                       .arg(m_recordInfo.audioPath);
             ret = QProcess::execute(cmd);
-            if (ret == 0)
+            if (ret == 0) {
                 emit recordFinished(m_recordInfo.record_path);
-            else
+                return REC_NOERROR;
+            }
+            else {
                 emit recordFailed(QString());
-            return;
+                return REC_FFMPEG_FATAL;
+            }
         }
         emit recordFinished(m_recordInfo.record_path);
+        return REC_NOERROR;
     }
     else
     {
         //todo get the error string from QProcess.
-        emit recordFailed(QString(tr("ffmpeg command failed, please whether check ffmpeg exists.")));
+        QString err_info = QString(tr("ffmpeg command failed, please whether check ffmpeg exists."));
+        emit recordFailed(err_info);
+        return REC_NOFFMPEG;
     }
 }
 
 void RecordVideoMgr::disconnectSignal()
 {
     DisplayWidget *pWid = qobject_cast<DisplayWidget *>(parent());
-    ZASSERT_EXIT(pWid);
+    if (!pWid)
+        return;
+
     if (pWid->isGLViewport()) {
         Zenovis *pVis = getZenovis();
         bool ret = disconnect(pVis, SIGNAL(frameDrawn(int)), this, SLOT(onFrameDrawn(int)));
     } else {
-        ZOptixViewport *pView = pWid->optixViewport();
+        auto pView = pWid->optixViewport();
         ZASSERT_EXIT(pView);
-        bool ret = disconnect(pView, &ZOptixViewport::sig_frameRecordFinished, this, &RecordVideoMgr::frameFinished);
-        ret = disconnect(pView, &ZOptixViewport::sig_recordFinished, this, &RecordVideoMgr::endRecToExportVideo);
+        bool ret = disconnect(pView, SIGNAL(sig_frameRecordFinished(int)), this, SLOT(frameFinished(int)));
+        ret = disconnect(pView, SIGNAL(sig_recordFinished()), this, SLOT(endRecToExportVideo()));
     }
 }
 
@@ -255,13 +286,25 @@ void RecordVideoMgr::onFrameDrawn(int currFrame)
             auto [x, y] = pVis->getSession()->get_window_size();
 
             auto extname = QFileInfo(QString::fromStdString(record_file)).suffix().toStdString();
-            pVis->getSession()->set_window_size((int)m_recordInfo.res.x(), (int)m_recordInfo.res.y());
-            pVis->getSession()->do_screenshot(record_file, extname);
-            pVis->getSession()->set_window_size(x, y);
+            if (pVis->getSession()->is_lock_window())
+            {
+                zeno::vec2i offset = pVis->getSession()->get_viewportOffset();
+                pVis->getSession()->set_window_size((int)m_recordInfo.res.x(), (int)m_recordInfo.res.y(), zeno::vec2i{0,0});
+                pVis->getSession()->do_screenshot(record_file, extname);
+                pVis->getSession()->set_window_size(x, y, offset);
+            }
+            else {
+                pVis->getSession()->set_window_size((int)m_recordInfo.res.x(), (int)m_recordInfo.res.y());
+                pVis->getSession()->do_screenshot(record_file, extname);
+                pVis->getSession()->set_window_size(x, y);
+            }
             scene->drawOptions->num_samples = old_num_samples;
 
             m_recordInfo.m_bFrameFinished[currFrame] = true;
             emit frameFinished(currFrame);
+
+            if (m_recordInfo.bAutoRemoveCache)
+                zeno::getSession().globalComm->removeCache(currFrame);
         }
 
         if (currFrame == m_recordInfo.frameRange.second)
@@ -275,7 +318,39 @@ void RecordVideoMgr::onFrameDrawn(int currFrame)
 
             //clear issues:
             m_recordInfo = VideoRecInfo();
-
         }
+    }
+    else if (pGlobalComm->isFrameBroken(currFrame) && !bFrameRecorded)
+    {
+        //recordErrorImg(currFrame);
+        zeno::log_warn("The zencache of frame {} has been removed.", currFrame);
+    }
+}
+
+void RecordVideoMgr::recordErrorImg(int currFrame)
+{
+    QImage img(QSize((int)m_recordInfo.res.x(), (int)m_recordInfo.res.y()), QImage::Format_RGBA8888);
+    img.fill(Qt::black);
+    QPainter painter(&img);
+    painter.setPen(Qt::white);
+    QFont fnt = zenoApp->font();
+    fnt.setPointSize(16);
+    painter.setFont(fnt);
+    painter.drawText(img.rect(), Qt::AlignCenter, QString(tr("the zencache of this frame has been removed")));
+    img.save(QString::fromStdString(zeno::format("{}/P/{:07d}.jpg", m_recordInfo.record_path.toStdString(), currFrame)), "JPG");
+
+    m_recordInfo.m_bFrameFinished[currFrame] = true;
+
+    if (currFrame == m_recordInfo.frameRange.second)
+    {
+        //disconnect first, to stop receiving the signal from viewport.
+        disconnectSignal();
+
+        endRecToExportVideo();
+
+        zeno::log_critical("after executing endRecToExportVideo()");
+
+        //clear issues:
+        m_recordInfo = VideoRecInfo();
     }
 }

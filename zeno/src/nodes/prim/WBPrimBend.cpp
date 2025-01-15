@@ -18,7 +18,8 @@
 #include <random>
 #include <sstream>
 #include <ctime>
-
+#include <iostream>
+#include <zeno/types/DictObject.h>
 namespace zeno
 {
 namespace
@@ -30,9 +31,9 @@ struct WBPrimBend : INode {
         auto limitDeformation = get_input<NumericObject>("Limit Deformation")->get<int>();
         auto symmetricDeformation = get_input<NumericObject>("Symmetric Deformation")->get<int>();
         auto angle = get_input<NumericObject>("Bend Angle (degree)")->get<float>();
-        auto upVector = has_input("Up Vector") ? get_input<NumericObject>("Up Vector")->get<vec3f>() : vec3f(0, 1, 0);
-        auto capOrigin = has_input("Capture Origin") ? get_input<NumericObject>("Capture Origin")->get<vec3f>() : vec3f(0, 0, 0);
-        auto dirVector = has_input("Capture Direction") ? get_input<NumericObject>("Capture Direction")->get<vec3f>() : vec3f(0, 0, 1);
+        auto upVector = has_input("Up Vector") ? get_input<NumericObject>("Up Vector")->get<zeno::vec3f>() : vec3f(0, 1, 0);
+        auto capOrigin = has_input("Capture Origin") ? get_input<NumericObject>("Capture Origin")->get<zeno::vec3f>() : vec3f(0, 0, 0);
+        auto dirVector = has_input("Capture Direction") ? get_input<NumericObject>("Capture Direction")->get<zeno::vec3f>() : vec3f(0, 0, 1);
         double capLen = has_input("Capture Length") ? get_input<NumericObject>("Capture Length")->get<float>() : 1.0;
 
         glm::vec3 up = normalize(glm::vec3(upVector[0], upVector[1], upVector[2]));
@@ -193,12 +194,32 @@ ZENDEFNODE(ParameterizeLine,
             }, /* category: */ {
                 "primitive",
             } });
+float lerp(float a, float b, float c)
+{
+  return a + (b-a)*c;
+}
+float Dlerp(float a, float b, float c)
+{
+  if(abs(b-511)<0.00001)
+    return a;
+  if(abs(b-a)>180){
+    float x = lerp(a, b+360, c);
+    return x>360?x-360:x;
+  }
+  return lerp(a, b, c);
+}
 struct LineResample : INode {
     void apply() override
     {
         auto prim = get_input<PrimitiveObject>("prim");
 
         auto segments = get_input<NumericObject>("segments")->get<int>();
+        bool has_schema = false;
+        if(has_input("AttrSchema"))
+          has_schema = true;
+        auto attrSchema = std::make_shared<zeno::DictObject>();
+        if(has_schema)
+          attrSchema = get_input<zeno::DictObject>("AttrSchema");
         if (segments < 1) { segments = 1; }
         std::vector<float> linesLen(prim->lines.size());
         if(!prim->lines.has_attr("parameterization")) {
@@ -221,7 +242,7 @@ struct LineResample : INode {
             }
         } else {
 #pragma omp parallel for
-            for (size_t i=0; i<prim->lines.size();i++) {
+            for (auto i=0; i<prim->lines.size();i++) {
                 linesLen[i] = prim->lines.attr<float>("parameterization")[i];
             }
         }
@@ -234,7 +255,7 @@ struct LineResample : INode {
             retprim->add_attr<float>("t");
             auto &t_arr = retprim->attr<float>("t");
 #pragma omp parallel for
-            for(size_t i=0; i<retprim->size();i++) {
+            for(auto i=0; i<retprim->size();i++) {
                 t_arr[i] = sampleBy[i];
             }
         } else {
@@ -243,11 +264,11 @@ struct LineResample : INode {
             retprim->add_attr<float>("t");
             auto &t_arr = retprim->attr<float>("t");
 #pragma omp parallel for
-            for (size_t i=0; i<retprim->size(); i++) {
+            for (auto i=0; i<retprim->size(); i++) {
                 t_arr[i] = (float)i / float(segments);
             }
 #pragma omp parallel for
-            for (size_t i=0; i<segments; i++) {
+            for (auto i=0; i<segments; i++) {
                 retprim->lines[i] = zeno::vec2i(i, i+1);
             }
         }
@@ -260,7 +281,7 @@ struct LineResample : INode {
                 }, prim->attr(key));
         }
 #pragma omp parallel for
-        for(size_t i=0; i<retprim->size();i++) {
+        for(auto i=0; i<retprim->size();i++) {
             float insertU = retprim->attr<float>("t")[i];
             auto it = std::upper_bound(linesLen.begin(), linesLen.end(), insertU);
             size_t index = it - linesLen.begin();
@@ -276,11 +297,33 @@ struct LineResample : INode {
             for(auto key:prim->attr_keys())
             {
                 if(key!="pos")
-                    std::visit([&retprim, &prim, &ind, &r1, &i, key](auto &&ref) {
+                    std::visit([&has_schema, &attrSchema, &retprim, &prim, &ind, &r1, &i, key](auto &&ref) {
                         using T = std::remove_cv_t<std::remove_reference_t<decltype(ref[0])>>;
                         auto a = prim->attr<T>(key)[ind[0]];
                         auto b = prim->attr<T>(key)[ind[1]];
                         retprim->attr<T>(key)[i] = a + (b-a)*r1;
+                        if(has_schema)
+                        {
+                          if(attrSchema->lut.find(key)!=attrSchema->lut.end())
+                          {
+                            auto schema = zeno::safe_dynamic_cast<zeno::StringObject>(attrSchema->lut[key])->value;
+                            if(schema == "Degrees")
+                            {
+                              if constexpr (std::is_convertible_v<T, zeno::vec4f>)
+                              {
+                                retprim->attr<T>(key)[i] = zeno::vec4f(Dlerp(a[0],b[0],r1),Dlerp(a[1],b[1],r1),Dlerp(a[2],b[2],r1),Dlerp(a[3],b[3],r1));
+                              } else if constexpr (std::is_convertible_v<T, zeno::vec3f>)
+                              {
+                                retprim->attr<T>(key)[i] = zeno::vec3f(Dlerp(a[0],b[0],r1),Dlerp(a[1],b[1],r1),Dlerp(a[2],b[2],r1));
+                              } else if constexpr (std::is_convertible_v<T, zeno::vec2f>){
+                                retprim->attr<T>(key)[i] = zeno::vec2f(Dlerp(a[0],b[0],r1),Dlerp(a[1],b[1],r1));
+                              }else if constexpr (std::is_convertible_v<T, float>){
+                                retprim->attr<T>(key)[i] = Dlerp(a, b, r1);
+                              }
+                            }
+                          }
+                        }
+
                     }, prim->attr(key));
             }
         }
@@ -321,6 +364,7 @@ struct LineResample : INode {
 ZENDEFNODE(LineResample,
     {  /* inputs: */ {
             "prim",
+            {"DictObject", "AttrSchema"},
             {"int", "segments", "3"},
             "PrimSampler",
             {"string", "SampleBy", "t"},
@@ -412,7 +456,7 @@ struct LineCarve : INode {
         auto p = a + (b - a) * r1;
 
         prim->verts.reserve(prim->size() + 1);
-        prim->attr<vec3f>("pos").insert(prim->verts.begin() + int(index) + 1, { p[0], p[1], p[2] });
+        prim->attr<zeno::vec3f>("pos").insert(prim->verts.begin() + int(index) + 1, { p[0], p[1], p[2] });
 
         linesLen.reserve(linesLen.size() + 1);
         linesLen.insert(linesLen.begin() + int(index), insertU);
@@ -479,13 +523,13 @@ ZENDEFNODE(LineCarve,
 struct VisVec3Attribute : INode {
     void apply() override
     {
-        auto color = get_input<NumericObject>("color")->get<vec3f>();
+        auto color = get_input<NumericObject>("color")->get<zeno::vec3f>();
         auto useNormalize = get_input<NumericObject>("normalize")->get<int>();
         auto lengthScale = get_input<NumericObject>("lengthScale")->get<float>();
         auto name = get_input2<std::string>("name");
 
         auto prim = get_input<PrimitiveObject>("prim");
-        auto& attr = prim->verts.attr<vec3f>(name);
+        auto& attr = prim->verts.attr<zeno::vec3f>(name);
         auto& pos = prim->verts;
 
         auto primVis = std::make_shared<PrimitiveObject>();
@@ -500,7 +544,7 @@ struct VisVec3Attribute : INode {
                     },
                     prim->attr(key));
         }
-        auto& visColor = primVis->verts.add_attr<vec3f>("clr");
+        auto& visColor = primVis->verts.add_attr<zeno::vec3f>("clr");
         auto& visPos = primVis->verts;
 
 #pragma omp parallel for
@@ -616,30 +660,61 @@ ZENDEFNODE(TracePositionOneStep,
 struct PrimCopyAttr : INode {
     void apply() override {
         auto prim = get_input<PrimitiveObject>("prim");
-        auto sourceName = get_input<StringObject>("sourceName")->get();
-        auto targetName = get_input<StringObject>("targetName")->get();
-        auto type = get_input2<std::string>("type");
+        auto sourceName = get_input2<std::string>("sourceName");
+        auto targetName = get_input2<std::string>("targetName");
+        auto scope = get_input2<std::string>("scope");
 
-        if (!prim->verts.has_attr(sourceName))
-            zeno::log_error("no such attr named '{}'.", sourceName);
-//        if (prim->verts.has_attr(targetName))
-//            zeno::log_warn("already has such attr named '{}'.", targetName);
+        if (scope == "vert") {
+            if (!prim->verts.has_attr(sourceName)) {
+                zeno::log_error("verts no such attr named '{}'.", sourceName);
+            }
+            prim->verts.attr_visit<AttrAcceptAll>(sourceName, [&] (auto const &attarr) {
+                using T = std::decay_t<decltype(attarr[0])>;
+                auto &targetAttr = prim->verts.template add_attr<T>(targetName);
+                std::copy(attarr.begin(), attarr.end(), targetAttr.begin());
+            });
+        }
+        else if (scope == "tri") {
+            if (!prim->tris.has_attr(sourceName)) {
+                zeno::log_error("tris no such attr named '{}'.", sourceName);
+            }
+            prim->tris.attr_visit<AttrAcceptAll>(sourceName, [&] (auto const &attarr) {
+                using T = std::decay_t<decltype(attarr[0])>;
+                auto &targetAttr = prim->tris.template add_attr<T>(targetName);
+                std::copy(attarr.begin(), attarr.end(), targetAttr.begin());
+            });
+        }
+        else if (scope == "loop") {
+            if (!prim->loops.has_attr(sourceName)) {
+                zeno::log_error("loops no such attr named '{}'.", sourceName);
+            }
+            prim->loops.attr_visit<AttrAcceptAll>(sourceName, [&] (auto const &attarr) {
+                using T = std::decay_t<decltype(attarr[0])>;
+                auto &targetAttr = prim->loops.template add_attr<T>(targetName);
+                std::copy(attarr.begin(), attarr.end(), targetAttr.begin());
+            });
+        }
+        else if (scope == "poly") {
+            if (!prim->polys.has_attr(sourceName)) {
+                zeno::log_error("polys no such attr named '{}'.", sourceName);
+            }
+            prim->polys.attr_visit<AttrAcceptAll>(sourceName, [&] (auto const &attarr) {
+                using T = std::decay_t<decltype(attarr[0])>;
+                auto &targetAttr = prim->polys.template add_attr<T>(targetName);
+                std::copy(attarr.begin(), attarr.end(), targetAttr.begin());
+            });
+        }
+        else if (scope == "line") {
+            if (!prim->lines.has_attr(sourceName)) {
+                zeno::log_error("lines no such attr named '{}'.", sourceName);
+            }
+            prim->lines.attr_visit<AttrAcceptAll>(sourceName, [&] (auto const &attarr) {
+                using T = std::decay_t<decltype(attarr[0])>;
+                auto &targetAttr = prim->lines.template add_attr<T>(targetName);
+                std::copy(attarr.begin(), attarr.end(), targetAttr.begin());
+            });
+        }
 
-        std::visit(
-            [&](auto ty) {
-              using T = decltype(ty);
-
-              auto &sourceAttr = prim->verts.attr<T>(sourceName);     // 源属性
-              auto &targetAttr = prim->verts.add_attr<T>(targetName); // 目标属性
-#pragma omp parallel for
-              for (intptr_t i = 0; i < prim->verts.size(); i++) {
-                  targetAttr[i] = sourceAttr[i];
-              }
-            },
-            enum_variant<std::variant<float, vec2f, vec3f, vec4f, int, vec2i, vec3i, vec4i>>(
-                array_index({"float", "vec2f", "vec3f", "vec4f", "int", "vec2i", "vec3i", "vec4i"}, type)));
-
-//        prim->verts.erase_attr(sourceName);
         set_output("prim", std::move(prim));
     }
 };
@@ -648,7 +723,7 @@ ZENDEFNODE(PrimCopyAttr,
                    "prim",
                    {"string", "sourceName", "s"},
                    {"string", "targetName", "t"},
-                   {"enum float vec2f vec3f vec4f int vec2i vec3i vec4i", "type", "float"},
+                   {"enum vert tri loop poly line", "scope", "vert"},
                }, /* outputs: */ {
                    "prim",
                }, /* params: */ {
@@ -656,7 +731,161 @@ ZENDEFNODE(PrimCopyAttr,
                    "erode",
                }});
 
+char* getPrimRawData(PrimitiveObject* prim, std::string type, std::string name, std::string scope)
+{
+  std::cout<<type<<" "<<scope<<" "<<name<<std::endl;
+  if(type == "int")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<int>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<int>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<int>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<int>(name).data());
+  }
+  if(type == "float")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<float>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<float>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<float>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<float>(name).data());
+  }
+  if(type == "vec2f")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec2f>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec2f>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec2f>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec2f>(name).data());
+  }
+  if(type == "vec2i")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec2i>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec2i>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec2i>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec2i>(name).data());
+  }
+  if(type == "vec3f")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec3f>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec3f>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec3f>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec3f>(name).data());
+  }
+  if(type == "vec3i")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec3i>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec3i>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec3i>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec3i>(name).data());
+  }
+  if(type == "vec4f")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec4f>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec4f>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec4f>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec4f>(name).data());
+  }
+  if(type == "vec4i")
+  {
+    if(scope == "verts")
+      return (char*)(prim->attr<vec4i>(name).data());
+    if(scope == "tris")
+      return (char*)(prim->tris.attr<vec4i>(name).data());
+    if(scope == "polys")
+      return (char*)(prim->polys.attr<vec4i>(name).data());
+    if(scope == "lines")
+      return (char*)(prim->lines.attr<vec4i>(name).data());
+  }
+}
 
+struct PrimTwoCopyAttr : INode {
+  void apply() override {
+    auto prim   = get_input<PrimitiveObject>("primTo");
+    auto primFrom = get_input<PrimitiveObject>("primFrom");
+    auto sourceName = get_input2<std::string>("NameFrom");
+    auto targetName = get_input2<std::string>("NameTo");
+    auto srcscope = get_input2<std::string>("ScopeFrom");
+    auto tarscope = get_input2<std::string>("ScopeTo");
+    auto type = get_input2<std::string>("type");
+
+    char* dataToPtr;
+    char* dataFromPtr;
+    size_t size;
+
+    dataToPtr = getPrimRawData(prim.get(), type, targetName, tarscope);
+    dataFromPtr = getPrimRawData(primFrom.get(), type, sourceName, srcscope);
+    if(srcscope=="verts")
+      size = primFrom->verts.size();
+    if(srcscope=="tris")
+      size = primFrom->tris.size();
+    if(srcscope=="lines")
+      size = primFrom->lines.size();
+    if(srcscope=="polys")
+      size = primFrom->polys.size();
+
+    if(type=="int")
+      size *= 4;
+    if(type=="float")
+      size *= 4;
+    if(type=="vec2f")
+      size *= 8;
+    if(type=="vec2i")
+      size *= 8;
+    if(type=="vec3f")
+      size *= 12;
+    if(type=="vec3i")
+      size *= 12;
+    if(type=="vec4f")
+      size *= 16;
+    if(type=="vec4i")
+      size *= 16;
+
+    memcpy(dataToPtr, dataFromPtr,size);
+
+    set_output("prim", std::move(prim));
+  }
+};
+ZENDEFNODE(PrimTwoCopyAttr,
+           { /* inputs: */ {
+                "primTo",
+                "primFrom",
+                {"string", "NameTo", "s"},
+                {"string", "NameFrom", "t"},
+                {"enum verts tris loops polys lines", "ScopeTo", "verts"},
+                {"enum verts tris loops polys lines", "ScopeFrom", "verts"},
+                {"enum int float vec2f vec2i vec3f vec3i vec4f vec4i", "type", "vec3f"},
+            }, /* outputs: */ {
+                "prim",
+            }, /* params: */ {
+            }, /* category: */ {
+                "erode",
+            }});
 ///////////////////////////////////////////////////////////////////////////////
 // 2022.07.22 BVH
 ///////////////////////////////////////////////////////////////////////////////
@@ -666,8 +895,8 @@ struct BVHNearestPos : INode {
         auto primNei = get_input<PrimitiveObject>("primNei");
 
         auto bvh_id = prim->attr<float>(get_input2<std::string>("bvhIdTag"));
-        auto bvh_ws = prim->attr<vec3f>(get_input2<std::string>("bvhWeightTag"));
-        auto &bvh_pos = prim->add_attr<vec3f>(get_input2<std::string>("bvhPosTag"));
+        auto bvh_ws = prim->attr<zeno::vec3f>(get_input2<std::string>("bvhWeightTag"));
+        auto &bvh_pos = prim->add_attr<zeno::vec3f>(get_input2<std::string>("bvhPosTag"));
 
 #pragma omp parallel for
         for (int i = 0; i < prim->size(); i++) {
@@ -693,42 +922,58 @@ ZENDEFNODE(BVHNearestPos,
                    "prim"
                }, /* params: */ {
                }, /* category: */ {
-                   "primitive"
+                   "deprecated"
                }});
 
 struct BVHNearestAttr : INode {
     void apply() override {
         auto prim = get_input<PrimitiveObject>("prim");
         auto primNei = get_input<PrimitiveObject>("primNei");
+        auto bvhIdTag = get_input2<std::string>("bvhIdTag");
+        auto bvhAttributesType = get_input2<std::string>("bvhAttributesType");
+        auto targetType = get_input2<std::string>("targetPrimType");
+        auto attr_tag = get_input2<std::string>("bvhAttrTag");
 
-        auto bvhIdTag = get_input<StringObject>("bvhIdTag")->get();
-        auto& bvh_id = prim->verts.attr<float>(bvhIdTag);
-        auto bvhWeightTag = get_input<StringObject>("bvhWeightTag")->get();
-        auto& bvh_ws = prim->verts.attr<vec3f>(bvhWeightTag);
-
-        auto attr_tag = get_input<StringObject>("bvhAttrTag")->get();
         if (!primNei->verts.has_attr(attr_tag))
         {
             zeno::log_error("primNei has no such Data named '{}'.", attr_tag);
         }
-        auto& inAttr = primNei->verts.attr<float>(attr_tag);
+
+        std::visit([&](auto attrty) {
+            using T = decltype(attrty);
+        auto& inAttr = primNei->verts.attr<T>(attr_tag);
         if (!prim->verts.has_attr(attr_tag))
         {
-            prim->add_attr<float>(attr_tag);
+            prim->add_attr<T>(attr_tag);
         }
-        auto& outAttr = prim->verts.attr<float>(attr_tag);
+        auto& outAttr = prim->verts.attr<T>(attr_tag);
 
-#pragma omp parallel for
-        for (int i = 0; i < prim->size(); i++)
-        {
+
+        if(targetType == "tris"){
+        auto bvhWeightTag = get_input2<std::string>("bvhWeightTag");
+        auto& bvh_ws = prim->verts.attr<zeno::vec3f>(bvhWeightTag);
+        auto& bvh_id = prim->verts.attr<float>(bvhIdTag);
+        #pragma omp parallel for
+        for (int i = 0; i < prim->size(); i++){
             vec3i vertsIdx = primNei->tris[(int)bvh_id[i]];
             int id0 = vertsIdx[0], id1 = vertsIdx[1], id2 = vertsIdx[2];
             auto attr0 = inAttr[id0];
             auto attr1 = inAttr[id1];
             auto attr2 = inAttr[id2];
-
             outAttr[i] = bvh_ws[i][0] * attr0 + bvh_ws[i][1] * attr1 + bvh_ws[i][2] * attr2;
+            }
         }
+        else if(targetType == "points"){
+             auto& bvh_id = prim->verts.attr<int>(bvhIdTag);//int type for querynearestpoints node
+            #pragma omp parallel for
+            for (int i = 0; i < prim->size(); i++){
+                int id = bvh_id[i];
+                outAttr[i] = inAttr[id];
+            }
+        }
+
+        }, enum_variant<std::variant<float, vec3f>>(array_index({"float", "vec3f"}, bvhAttributesType)));
+
 
         set_output("prim", get_input("prim"));
     }
@@ -740,6 +985,8 @@ ZENDEFNODE(BVHNearestAttr,
                    {"string", "bvhIdTag", "bvh_id"},
                    {"string", "bvhWeightTag", "bvh_ws"},
                    {"string", "bvhAttrTag", "bvh_attr"},
+                   {"enum float vec3f", "bvhAttributesType", "float"},
+                   {"enum tris points", "targetPrimType", "tris"},
                }, /* outputs: */ {
                    "prim"
                }, /* params: */ {
@@ -767,7 +1014,7 @@ struct HeightStarPattern : zeno::INode {
 
 #pragma omp parallel for
         for (int i = 0; i < prim->verts.size(); i++) {
-            auto coord = prim->verts.attr<vec3f>("res")[i];
+            auto coord = prim->verts.attr<zeno::vec3f>("res")[i];
             vec2f coord2d = vec2f(coord[0], coord[1]);
             vec2f cellcenter = vec2f(floor(coord2d[0]), floor(coord2d[1]));
             float result = 0;
@@ -841,22 +1088,29 @@ struct PrimSetAttr : INode {
             [&](auto ty) {
               using T = decltype(ty);
 
+              auto val = value->get<T>();
               if (method == "vert") {
-                  if (!prim->has_attr(name)) {
-                      prim->add_attr<T>(name);
-                  }
-                  auto &attr_arr = prim->attr<T>(name);
-
-                  auto val = value->get<T>();
+                  auto &attr_arr = prim->add_attr<T>(name);
                   if (index < attr_arr.size()) {
                       attr_arr[index] = val;
                   }
               } else if (method == "tri") {
-                  if (!prim->tris.has_attr(name)) {
-                      prim->tris.add_attr<T>(name);
+                  auto &attr_arr = prim->tris.add_attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      attr_arr[index] = val;
                   }
-                  auto &attr_arr = prim->tris.attr<T>(name);
-                  auto val = value->get<T>();
+              } else if (method == "line") {
+                  auto &attr_arr = prim->lines.add_attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      attr_arr[index] = val;
+                  }
+              } else if (method == "loop") {
+                  auto &attr_arr = prim->loops.add_attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      attr_arr[index] = val;
+                  }
+              } else if (method == "poly") {
+                  auto &attr_arr = prim->polys.add_attr<T>(name);
                   if (index < attr_arr.size()) {
                       attr_arr[index] = val;
                   }
@@ -876,7 +1130,7 @@ ZENDEFNODE(PrimSetAttr,
                    {"int", "value", "0"},
                    {"string", "name", "index"},
                    {"enum float vec2f vec3f vec4f int vec2i vec3i vec4i", "type", "int"},
-                   {"enum vert tri", "method", "tri"},
+                   {"enum vert tri line loop poly", "method", "tri"},
                    {"int", "index", "0"},
                }, /* outputs: */ {
                    "prim",
@@ -910,6 +1164,21 @@ struct PrimGetAttr : INode {
                   if (index < attr_arr.size()) {
                       value->set<T>(attr_arr[index]);
                   }
+              } else if (method == "line") {
+                  auto &attr_arr = prim->lines.attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      value->set<T>(attr_arr[index]);
+                  }
+              } else if (method == "loop") {
+                  auto &attr_arr = prim->loops.attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      value->set<T>(attr_arr[index]);
+                  }
+              } else if (method == "poly") {
+                  auto &attr_arr = prim->polys.attr<T>(name);
+                  if (index < attr_arr.size()) {
+                      value->set<T>(attr_arr[index]);
+                  }
               } else {
                   throw Exception("bad type: " + method);
               }
@@ -925,7 +1194,7 @@ ZENDEFNODE(PrimGetAttr,
                    "prim",
                    {"string", "name", "index"},
                    {"enum float vec2f vec3f vec4f int vec2i vec3i vec4i", "type", "int"},
-                   {"enum vert tri", "method", "tri"},
+                   {"enum vert tri line loop poly", "method", "tri"},
                    {"int", "index", "0"},
                }, /* outputs: */ {
                    "value",
@@ -940,6 +1209,34 @@ struct PrimitiveDelAttrs : zeno::INode {
         auto prim = get_input<PrimitiveObject>("prim");
         auto invert = get_input2<bool>("invert");
         auto nameString = get_input2<std::string>("names");
+        auto scope = get_input2<std::string>("scope");
+        bool flag_verts = false;
+        bool flag_tris = false;
+        bool flag_lines = false;
+        bool flag_loops = false;
+        bool flag_polys = false;
+        if (scope == "vert") {
+            flag_verts = true;
+        }
+        else if (scope == "tri") {
+            flag_tris = true;
+        }
+        else if (scope == "loop") {
+            flag_loops = true;
+        }
+        else if (scope == "poly") {
+            flag_polys = true;
+        }
+        else if (scope == "line") {
+            flag_lines = true;
+        }
+        else {
+            flag_verts = true;
+            flag_tris = true;
+            flag_lines = true;
+            flag_loops = true;
+            flag_polys = true;
+        }
 
         std::vector<std::string> names;
         std::istringstream ss(nameString);
@@ -950,11 +1247,11 @@ struct PrimitiveDelAttrs : zeno::INode {
 
         if (!invert) {
             for(std::string attr : names) {
-                prim->verts.attrs.erase(attr);
-                prim->tris.attrs.erase(attr);
-                prim->quads.attrs.erase(attr);
-                prim->loops.attrs.erase(attr);
-                prim->polys.attrs.erase(attr);
+                if (flag_verts) prim->verts.attrs.erase(attr);
+                if (flag_tris)  prim->tris.attrs.erase(attr);
+                if (flag_lines) prim->lines.attrs.erase(attr);
+                if (flag_loops) prim->loops.attrs.erase(attr);
+                if (flag_polys) prim->polys.attrs.erase(attr);
             }
         } else {
             std::vector<std::string> myKeys = prim->verts.attr_keys();
@@ -965,11 +1262,11 @@ struct PrimitiveDelAttrs : zeno::INode {
             myKeys.erase(reserve_attr, myKeys.end());
 
             for(std::string attr : myKeys){
-                prim->verts.attrs.erase(attr);
-                prim->tris.attrs.erase(attr);
-                prim->quads.attrs.erase(attr);
-                prim->loops.attrs.erase(attr);
-                prim->polys.attrs.erase(attr);
+                if (flag_verts) prim->verts.attrs.erase(attr);
+                if (flag_tris)  prim->tris.attrs.erase(attr);
+                if (flag_lines) prim->lines.attrs.erase(attr);
+                if (flag_loops) prim->loops.attrs.erase(attr);
+                if (flag_polys) prim->polys.attrs.erase(attr);
             }
         }
 
@@ -981,6 +1278,7 @@ ZENDEFNODE(PrimitiveDelAttrs,
                    "prim",
                    {"bool", "invert", "0"},
                    {"string", "names", "name_1 name_2"},
+                   {"enum vert tri loop poly line all", "scope", "all"},
                }, /* outputs: */ {
                    "prim",
                }, /* params: */ {
@@ -996,8 +1294,8 @@ ZENDEFNODE(PrimitiveDelAttrs,
 struct QuatRotBetweenVectors : INode {
     void apply() override
     {
-        auto start = normalize(get_input<NumericObject>("start")->get<vec3f>());
-        auto dest = normalize(get_input<NumericObject>("dest")->get<vec3f>());
+        auto start = normalize(get_input<NumericObject>("start")->get<zeno::vec3f>());
+        auto dest = normalize(get_input<NumericObject>("dest")->get<zeno::vec3f>());
 
         glm::vec3 gl_start(start[0], start[1], start[2]);
         glm::vec3 gl_dest(dest[0], dest[1], dest[2]);
@@ -1023,8 +1321,8 @@ ZENDEFNODE(QuatRotBetweenVectors,
 // 矢量 * 四元数 => 矢量
 struct QuatRotate : INode {
     void apply() override {
-        auto quat = get_input<NumericObject>("quat")->get<vec4f>();
-        auto vec3 = get_input<NumericObject>("vec3")->get<vec3f>();
+        auto quat = get_input<NumericObject>("quat")->get<zeno::vec4f>();
+        auto vec3 = get_input<NumericObject>("vec3")->get<zeno::vec3f>();
 
         glm::vec3 gl_vec3(vec3[0], vec3[1], vec3[2]);
         glm::quat gl_quat(quat[3], quat[0], quat[1], quat[2]);
@@ -1052,7 +1350,7 @@ struct QuatAngleAxis : INode {
     void apply() override
     {
         auto angle = get_input<NumericObject>("angle(D)")->get<float>();
-        auto axis = normalize(get_input<NumericObject>("axis")->get<vec3f>());
+        auto axis = normalize(get_input<NumericObject>("axis")->get<zeno::vec3f>());
 
         float gl_angle = glm::radians(angle);
         glm::vec3 gl_axis(axis[0], axis[1], axis[2]);
@@ -1079,7 +1377,7 @@ ZENDEFNODE(QuatAngleAxis,
 // 四元数 -> 旋转角度
 struct QuatGetAngle : INode {
     void apply() override {
-        auto quat = get_input<NumericObject>("quat")->get<vec4f>();
+        auto quat = get_input<NumericObject>("quat")->get<zeno::vec4f>();
 
         glm::quat gl_quat(quat[3], quat[0], quat[1], quat[2]);
         float gl_angle = glm::degrees(glm::angle(gl_quat));
@@ -1103,7 +1401,7 @@ ZENDEFNODE(QuatGetAngle,
 // 四元数 -> 旋转轴
 struct QuatGetAxis : INode {
     void apply() override {
-        auto quat = get_input<NumericObject>("quat")->get<vec4f>();
+        auto quat = get_input<NumericObject>("quat")->get<zeno::vec4f>();
 
         glm::quat gl_quat(quat[3], quat[0], quat[1], quat[2]);
         glm::vec3 gl_axis = glm::axis(gl_quat);
@@ -1317,7 +1615,7 @@ struct PrimAttribBlur : INode {
 //        QueryPerformanceCounter(&t1_0);
 
 #pragma omp parallel for
-        for (size_t point_idx = 0; point_idx < prim->verts.size(); point_idx++) {   // 遍历所有点，找它的邻居
+        for (auto point_idx = 0; point_idx < prim->verts.size(); point_idx++) {   // 遍历所有点，找它的邻居
             std::map<std::string, int> neighborVertID;
             std::map<std::string, float> neighborEdgeLength;
             for(int i = 0; i < 8; i++) {
@@ -1331,7 +1629,7 @@ struct PrimAttribBlur : INode {
 
             if (prim_type == "line") {
 #pragma omp parallel for shared(flag)
-                for (size_t line_idx = 0; line_idx < prim->lines.size(); line_idx++) {
+                for (auto line_idx = 0; line_idx < prim->lines.size(); line_idx++) {
                     if(flag) continue;
                     if (prim->lines[line_idx][0] == point_idx) {
                         neighborVertID["neighbor_" + std::to_string(find_neighbor_count)] = prim->lines[line_idx][1];
@@ -1365,7 +1663,7 @@ struct PrimAttribBlur : INode {
                 //========================================
 
 #pragma omp parallel for
-                for (size_t tri_idx = 0; tri_idx < prim->tris.size(); tri_idx++) {
+                for (auto tri_idx = 0; tri_idx < prim->tris.size(); tri_idx++) {
                     auto const &ind = prim->tris[tri_idx];
                     if (ind[0] == point_idx) {
                         pointNeighborSign[ind[1]] = 1;
@@ -1469,7 +1767,7 @@ struct PrimAttribBlur : INode {
               for (int loop = 0; loop < iterations; loop++) {
 #pragma omp parallel for
                   // data => data_temp
-                  for (size_t i = 0; i < prim->verts.size(); i++) {
+                  for (auto i = 0; i < prim->verts.size(); i++) {
                       std::vector<int> neighborIDs(8);
                       neighborIDs[0] = neighbor_0[i];
                       neighborIDs[1] = neighbor_1[i];
@@ -1497,7 +1795,7 @@ struct PrimAttribBlur : INode {
                   }
 #pragma omp parallel for
                   // data_temp => data
-                  for (size_t i = 0; i < prim->verts.size(); i++) {
+                  for (auto i = 0; i < prim->verts.size(); i++) {
                       std::vector<int> neighborIDs(8);
                       neighborIDs[0] = neighbor_0[i];
                       neighborIDs[1] = neighbor_1[i];
@@ -1719,10 +2017,24 @@ struct PrimHasAttr : INode {
     void apply() override {
         auto prim = get_input<PrimitiveObject>("prim");
         auto attrName = get_input2<std::string>("attrName");
+        auto scope = get_input2<std::string>("scope");
 
         bool x = false;
-        if (prim->verts.has_attr(attrName))
-            x = true;
+        if (scope == "vert") {
+            x = prim->verts.has_attr(attrName);
+        }
+        else if (scope == "tri") {
+            x = prim->tris.has_attr(attrName);
+        }
+        else if (scope == "loop") {
+            x = prim->loops.has_attr(attrName);
+        }
+        else if (scope == "poly") {
+            x = prim->polys.has_attr(attrName);
+        }
+        else if (scope == "line") {
+            x = prim->lines.has_attr(attrName);
+        }
 
         auto hasAttr = std::make_shared<NumericObject>();
         hasAttr->set<bool>(x);
@@ -1732,6 +2044,7 @@ struct PrimHasAttr : INode {
 ZENDEFNODE(PrimHasAttr,
            { /* inputs: */ {
                    "prim",
+                   {"enum vert tri loop poly line", "scope", "vert"},
                    {"string", "attrName", "attr_x"},
                }, /* outputs: */ {
                    "hasAttr",
@@ -1740,41 +2053,5 @@ ZENDEFNODE(PrimHasAttr,
                    "erode",
                }});
 
-struct HF_rotate_displacement_2d : INode {
-    void apply() override {
-        auto terrain = get_input<PrimitiveObject>("prim_2DGrid");
-
-        auto& var = terrain->verts.attr<vec3f>("var");
-        auto& pos = terrain->verts.attr<vec3f>("pos");
-
-        auto angle = get_input<NumericObject>("Rotate Displacement")->get<float>();
-        float gl_angle = glm::radians(angle);
-        glm::vec3 gl_axis(0.0, 1.0, 0.0);
-        glm::quat gl_quat = glm::angleAxis(gl_angle, gl_axis);
-
-#pragma omp parallel for
-        for (int i = 0; i < terrain->verts.size(); i++)
-        {
-            glm::vec3 ret{};// = glm::vec3(0, 0, 0);
-            ret = glm::rotate(
-                        gl_quat,
-                        glm::vec3(var[i][0], var[i][1], var[i][2])
-                    );
-            pos[i] -= vec3f(ret.x, ret.y, ret.z);
-        }
-
-        set_output("prim_2DGrid", get_input("prim_2DGrid"));
-    }
-};
-ZENDEFNODE(HF_rotate_displacement_2d,
-        { /* inputs: */ {
-               "prim_2DGrid",
-                {"float", "Rotate Displacement", "0"}
-           }, /* outputs: */ {
-               "prim_2DGrid",
-           }, /* params: */ {
-           }, /* category: */ {
-               "erode",
-           } });
 } // namespace
 } // namespace zeno

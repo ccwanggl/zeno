@@ -30,7 +30,7 @@ struct ApplyGridBoundaryOnZSGrid : INode {
 
         using namespace zs;
 
-        auto cudaPol = cuda_exec().device(0);
+        auto cudaPol = cuda_exec();
         auto typeStr = get_param<std::string>("type");
         collider_e type =
             typeStr == "sticky" ? collider_e::Sticky : (typeStr == "slip" ? collider_e::Slip : collider_e::Separate);
@@ -123,7 +123,7 @@ struct ApplyBoundaryOnZSGrid : INode {
 
         using namespace zs;
 
-        auto cudaPol = cuda_exec().device(0);
+        auto cudaPol = cuda_exec();
 
         if (has_input<ZenoBoundary>("ZSBoundary")) {
             auto boundary = get_input<ZenoBoundary>("ZSBoundary");
@@ -364,7 +364,7 @@ struct ComputeParticleBeta : INode {
         fmt::print(fg(fmt::color::green), "begin executing ComputeParticleBeta\n");
 
         using namespace zs;
-        auto cudaPol = cuda_exec().device(0);
+        auto cudaPol = cuda_exec();
         auto parObjPtrs = RETRIEVE_OBJECT_PTRS(ZenoParticles, "ZSParticles");
         auto &partition = get_input<ZenoPartition>("ZSPartition")->get();
         auto stepDt = get_input<zeno::NumericObject>("dt")->get<float>();
@@ -586,7 +586,7 @@ struct ApplyWindImpulseOnZSGrid : INode {
         auto windDensity = get_input2<float>("windDensity");
 
         match([&](const auto &velLsPtr) {
-            auto cudaPol = cuda_exec().device(0);
+            auto cudaPol = cuda_exec();
             for (auto &&parObjPtr : parObjPtrs) {
                 auto &pars = parObjPtr->getParticles();
                 if (parObjPtr->category == ZenoParticles::surface || parObjPtr->category == ZenoParticles::tracker) {
@@ -625,17 +625,11 @@ struct TransformZSLevelSet : INode {
         using basic_ls_t = typename ZenoLevelSet::basic_ls_t;
         // translation
         if (has_input("translation")) {
-            auto b = get_input<NumericObject>("translation")->get<vec3f>();
+            auto b = get_input<NumericObject>("translation")->get<zeno::vec3f>();
             match(
                 [&b](basic_ls_t &basicLs) {
                     match(
-                        [b](std::shared_ptr<typename basic_ls_t::clspls_t> lsPtr) {
-                            lsPtr->translate(zs::vec<float, 3>{b[0], b[1], b[2]});
-                        },
-                        [b](std::shared_ptr<typename basic_ls_t::ccspls_t> lsPtr) {
-                            lsPtr->translate(zs::vec<float, 3>{b[0], b[1], b[2]});
-                        },
-                        [b](std::shared_ptr<typename basic_ls_t::sgspls_t> lsPtr) {
+                        [b](std::shared_ptr<typename basic_ls_t::spls_t> lsPtr) {
                             lsPtr->translate(zs::vec<float, 3>{b[0], b[1], b[2]});
                         },
                         [](auto &lsPtr) {
@@ -655,9 +649,7 @@ struct TransformZSLevelSet : INode {
             auto s = get_input<NumericObject>("scaling")->get<float>();
             match(
                 [&s](basic_ls_t &basicLs) {
-                    match([s](std::shared_ptr<typename basic_ls_t::clspls_t> lsPtr) { lsPtr->scale(s); },
-                          [s](std::shared_ptr<typename basic_ls_t::ccspls_t> lsPtr) { lsPtr->scale(s); },
-                          [s](std::shared_ptr<typename basic_ls_t::sgspls_t> lsPtr) { lsPtr->scale(s); },
+                    match([s](std::shared_ptr<typename basic_ls_t::spls_t> lsPtr) { lsPtr->scale(s); },
                           [](auto &lsPtr) {
                               auto msg = get_var_type_str(*lsPtr);
                               throw std::runtime_error(
@@ -671,19 +663,16 @@ struct TransformZSLevelSet : INode {
         }
         // rotation
         if (has_input("eulerXYZ")) {
-            auto yprAngles = get_input<NumericObject>("eulerXYZ")->get<vec3f>();
+            auto yprAngles = get_input<NumericObject>("eulerXYZ")->get<zeno::vec3f>();
             auto rot = zs::Rotation<float, 3>{yprAngles[0], yprAngles[1], yprAngles[2], zs::degree_c, zs::ypr_c};
             match(
                 [&rot](basic_ls_t &basicLs) {
-                    match(
-                        [rot](std::shared_ptr<typename basic_ls_t::clspls_t> lsPtr) { lsPtr->rotate(rot.transpose()); },
-                        [rot](std::shared_ptr<typename basic_ls_t::ccspls_t> lsPtr) { lsPtr->rotate(rot.transpose()); },
-                        [rot](std::shared_ptr<typename basic_ls_t::sgspls_t> lsPtr) { lsPtr->rotate(rot.transpose()); },
-                        [](auto &lsPtr) {
-                            auto msg = get_var_type_str(*lsPtr);
-                            throw std::runtime_error(
-                                fmt::format("levelset of type [{}] cannot be transformed yet.", msg));
-                        })(basicLs._ls);
+                    match([rot](std::shared_ptr<typename basic_ls_t::spls_t> lsPtr) { lsPtr->rotate(rot.transpose()); },
+                          [](auto &lsPtr) {
+                              auto msg = get_var_type_str(*lsPtr);
+                              throw std::runtime_error(
+                                  fmt::format("levelset of type [{}] cannot be transformed yet.", msg));
+                          })(basicLs._ls);
                 },
                 [](auto &ls) {
                     auto msg = get_var_type_str(ls);

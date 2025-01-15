@@ -5,10 +5,12 @@
 
 namespace BRDFBasics{
 static __inline__ __device__
-float PowerHeuristic(float a, float b)
+float PowerHeuristic(float a, float b, float beta = 2.0f)
 {
-  float t = a * a;
-  return t / (b * b + t);
+    float t  = pow(a,beta);
+    float t2 = pow(b, beta);
+    return t / (t2 + t + 1e-6);
+  
 }
 static __inline__ __device__  float fresnel(float cosT){
     float v = clamp(1-cosT,0.0f,1.0f);
@@ -23,7 +25,7 @@ static __inline__ __device__ vec3 fresnelSchlick(vec3 r0, float radians)
 static __inline__ __device__ float fresnelSchlick(float r0, float radians)
 {
     //previous : mix(1.0, fresnel(radians), r0); //wrong
-    return mix(fresnel(radians), 1.0f, r0); //giving: (1 - r0) * pow(radians, 5) + r0, consistant with line 15
+    return mix(fresnel(radians), 1.0f, r0); //giving: (1 - r0) * pow(1 - radians, 5) + r0, consistant with line 15
 }
 static __inline__ __device__ float SchlickWeight(float u)
 {
@@ -95,11 +97,13 @@ static __inline__ __device__ vec3 sampleUniformHemiSphere(unsigned int &seed)
 static __inline__ __device__  vec3 CosineSampleHemisphere(float r1, float r2)
 {
   vec3 dir;
-  float r = sqrt(r1);
-  float phi = 2.0f * 3.1415926f  * r2;
-  dir.x = r * cos(phi);
-  dir.y = r * sin(phi);
-  dir.z = sqrt(max(0.0f, 1.0f - dir.x * dir.x - dir.y * dir.y));
+  float phi = 2.0f * M_PIf * r1;
+  float cosTheta = sqrt(r2), sinTheta = sqrt(1.0f - r2);
+//  float r = sqrt(r1);
+//  float phi = 2.0f * 3.1415926f  * r2;
+  dir.x = cos(phi) * sinTheta;
+  dir.y = sin(phi) * sinTheta;
+  dir.z = cosTheta;
   return dir;
 }
 static __inline__ __device__  vec3 UniformSampleHemisphere(float r1, float r2)
@@ -214,7 +218,7 @@ float ThinTransmissionRoughness(float ior, float roughness)
 static __inline__ __device__
 void CalculateAnisotropicParams(float roughness, float anisotropic, float &ax, float &ay)
 {
-    float aspect = sqrtf(1.0f - 0.9f * anisotropic);
+    float aspect = sqrtf(1.0f - min(anisotropic,0.999f));
     ax = max(0.001f, roughness*roughness / (aspect));
     ay = max(0.001f, roughness*roughness * aspect);
 }
@@ -318,7 +322,7 @@ float DielectricFresnel(float cosThetaI, float eta)
   float eta2 = eta * eta;
 
   float cos2t = 1.0f - sin2 / eta2;
-  if(cos2t < 0) return 1.0f;
+  if(cos2t < 0.0f) return 1.0f;
 
   float t0 = sqrt(cos2t);
   float t1 = eta * t0;
@@ -402,26 +406,31 @@ vec3 EvalDisneyDiffuse(vec3 baseColor, float subsurface, float roughness, float 
     return vec3(0.0);
 
   float LDotH = abs(dot(L, H));
-  float LH2 = dot(L,V) + 1.0f;
-  float Rr = roughness * LH2;
-  // Diffuse
-  float FL = SchlickWeight(abs(L.z));
-  float FV = SchlickWeight(abs(V.z));
-  float Fretro = Rr * (FL + FV + FL * FV * (Rr - 1.0f));
-  float Fd = (1.0f - 0.5f * FL) * (1.0f - 0.5f * FV);
+  float FD90MinusOne = 2.0f * roughness * LDotH * LDotH - 0.5f;
+  float FDL = 1.0f + (FD90MinusOne * SchlickWeight(abs(L.z)));
+  float FDV = 1.0F + (FD90MinusOne * SchlickWeight(abs(V.z)));
+//  float LH2 = dot(L,V) + 1.0f;
+//  float Rr = roughness * LH2;
+//  // Diffuse
+//  float FL = SchlickWeight(abs(L.z));
+//  float FV = SchlickWeight(abs(V.z));
+//  float Fretro = Rr * (FL + FV + FL * FV * (Rr - 1.0f));
+//  float Fd = (1.0f - 0.5f * FL) * (1.0f - 0.5f * FV);
 
 
   // Sheen
   float FH = SchlickWeight(LDotH);
   vec3 Fsheen = FH * sheen * Csheen;
 
-  pdf = L.z * 1.0f / M_PIf;
-  return 1.0f / M_PIf * baseColor * (Fd + Fretro) + Fsheen;
+  pdf = abs(L.z) / M_PIf;
+  return 1.0f / M_PIf * baseColor * (FDL * FDV) + Fsheen;
 }
 
 static __inline__ __device__
 float GTR2Aniso(float NDotH, float HDotX, float HDotY, float ax, float ay)
 {
+  ax = max(0.001f, ax);
+  ay = max(0.001f, ay);
   float a = HDotX / ax;
   float b = HDotY / ay;
   float c = a * a + b * b + NDotH * NDotH;
@@ -443,7 +452,7 @@ vec3 EvalMicrofacetReflection(float ax, float ay, vec3 V, vec3 L, vec3 H, vec3 F
   if (L.z * V.z <= 0.0)
     return vec3(0.0);
 
-  float D = GTR2Aniso(abs(H.z), H.x, H.y, ax, ay);
+  float D = clamp(GTR2Aniso(abs(H.z), H.x, H.y, ax, ay),0.0f, 10.0f);
   float G1 = SmithGAniso(abs(V.z), V.x, V.y, ax, ay);
   float G2 = G1 * SmithGAniso(abs(L.z), L.x, L.y, ax, ay);
 
@@ -463,13 +472,13 @@ vec3 EvalMicrofacetRefraction(vec3 baseColor, float ax, float ay, float eta, vec
   float LDotH = dot(L, H); //always negative
   float VDotH = dot(V, H); //always positive
 
-  float D = GTR2Aniso(abs(H.z), H.x, H.y, ax, ay);
+  float D = clamp(GTR2Aniso(abs(H.z), H.x, H.y, ax, ay),0.0f, 10.0f);
   float G1 = SmithGAniso(abs(V.z), V.x, V.y, ax, ay);
   float G2 = G1 * SmithGAniso(abs(L.z), L.x, L.y, ax, ay);
   float denom = LDotH * eta + VDotH;
   denom *= denom;
   float eta2 = eta * eta;
-  float jacobian = abs(LDotH) / denom;
+  float jacobian = abs(LDotH) / (denom + 1e-5f);
 
   pdf = G1 * max(0.0, VDotH) * D * jacobian / abs(V.z);
   return pow(baseColor, vec3(0.5f)) * (vec3(1.0f) - F)
@@ -493,12 +502,13 @@ vec3 EvalClearcoat(float ccR, vec3 V, vec3 L, vec3 H, float &pdf)
   float VDotH = abs(dot(V, H));
 
   float F = mix(0.04, 1.0, SchlickWeight(VDotH));
-  float D = GTR1(H.z, ccR);
+  float D = clamp(GTR2(abs(H.z), ccR),0.0f, 100.0f);
+//  float D = clamp(GTR2Aniso(abs(H.z), H.x, H.y, ccR*ccR, ccR*ccR),0.0f, 100.0f);
   float G = SmithG(L.z, 0.25f) * SmithG(V.z, 0.25f);
   float jacobian = 1.0f / (4.0f * VDotH);
 
   pdf = D * H.z * jacobian;
-  return vec3(F) * D * G;
+  return vec3(1.0) * D * G;
 }
 }
 

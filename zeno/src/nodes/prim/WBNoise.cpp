@@ -4,6 +4,7 @@
 
 #include <zeno/zeno.h>
 #include <zeno/types/PrimitiveObject.h>
+#include <zeno/types/UserData.h>
 #include <zeno/utils/log.h>
 #include <glm/gtx/quaternion.hpp>
 #include <cmath>
@@ -135,7 +136,7 @@ struct erode_noise_perlin : INode {
         auto attrName = get_param<std::string>("attrName");
         auto attrType = get_param<std::string>("attrType");
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -144,7 +145,7 @@ struct erode_noise_perlin : INode {
         {
             zeno::log_error("no such data named '{}'.", vec3fAttrName);
         }
-        auto& vec3fAttr = terrain->verts.attr<vec3f>(vec3fAttrName);
+        auto& vec3fAttr = terrain->verts.attr<zeno::vec3f>(vec3fAttrName);
 
 
         terrain->attr_visit(attrName, [&](auto& arr) {
@@ -535,7 +536,7 @@ struct erode_noise_simplex : INode {
         auto attrName = get_param<std::string>("attrName");
         auto attrType = get_param<std::string>("attrType");
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -544,7 +545,7 @@ struct erode_noise_simplex : INode {
         {
             zeno::log_error("no such data named '{}'.", posLikeAttrName);
         }
-        auto& pos = terrain->verts.attr<vec3f>(posLikeAttrName);
+        auto& pos = terrain->verts.attr<zeno::vec3f>(posLikeAttrName);
 
         terrain->attr_visit(attrName, [&](auto& arr) {
 #pragma omp parallel for
@@ -739,16 +740,16 @@ struct erode_noise_analytic_simplex_2d : INode {
 
         auto attrName = get_param<std::string>("attrName");
         if (!terrain->has_attr(attrName)) {
-            terrain->add_attr<vec3f>(attrName);
+            terrain->add_attr<zeno::vec3f>(attrName);
         }
-        auto& noise = terrain->verts.attr<vec3f>(attrName);
+        auto& noise = terrain->verts.attr<zeno::vec3f>(attrName);
 
         auto posLikeAttrName = get_input<StringObject>("posLikeAttrName")->get();
         if (!terrain->verts.has_attr(posLikeAttrName))
         {
             zeno::log_error("no such data named '{}'.", posLikeAttrName);
         }
-        auto& pos = terrain->verts.attr<vec3f>(posLikeAttrName);
+        auto& pos = terrain->verts.attr<zeno::vec3f>(posLikeAttrName);
 
 #pragma omp parallel for
         for (int i = 0; i < terrain->verts.size(); i++)
@@ -798,22 +799,168 @@ constexpr T PERM(T x) {
 
 #define INDEX(ix, iy, iz) PERM((ix) + PERM((iy) + PERM(iz)))
 
-std::random_device rd;
-std::default_random_engine engine(rd());
 std::uniform_real_distribution<float> d(0, 1);
 
 float impulseTab[256 * 4];
-void impulseTabInit() {
+void impulseTabInit(const int seed) {
+    std::default_random_engine engine(seed);
     int i;
     float *f = impulseTab;
     for (i = 0; i < 256; i++) {
         *f++ = d(engine);
         *f++ = d(engine);
         *f++ = d(engine);
-        *f++ = 1. - 2. * d(engine);
+        *f++ = 1.0f - 2.0f * d(engine);//-1~1
     }
 }
 
+float QuinticInterpolatingPolynomial(float t)
+{
+	return t * t * t *( t * ( t* 6.0 - 15.0 ) + 10.0 );  //6t^5-15t^4+10t^3   需要1-t
+}
+
+float scnoise(const float x, const float y, const float z, const int pulsenum, const int g_seed) {
+    
+    static int initialized;
+    float *fp = nullptr;
+    int i, j, k, h, n;
+    int ix, iy, iz;
+    float sum = 0;
+    float fx, fy, fz, dx, dy, dz, dist;
+
+    /* Initialize the random impulse table if necessary. */
+    if (!initialized) {
+        impulseTabInit(g_seed);
+        initialized = 1;
+    }
+    ix = floor(x);
+    fx = x - ix;
+    iy = floor(y);
+    fy = y - iy;
+    iz = floor(z);
+    fz = z - iz;
+
+
+    //int griddist = 1;
+    for (i = -1; i <= 1; i++) { //周围的grid：2*griddist+1, griddist对性能影响很大但是结果影响递减，所以这里暂为1
+        for (j = -1; j <= 1; j++) {
+            for (k = -1; k <= 1; k++) { 
+                h = INDEX(ix + i, iy + j, iz + k);
+                for (n = pulsenum; n > 0; n--, h = (h + 1) & 255) { 
+                    fp = &impulseTab[h * 4];
+                    dx = (float(i) - fx + *fp++);
+                    dy = (float(j) - fy + *fp++);
+                    dz = (float(k) - fz + *fp++);
+                    dist = dx * dx + dy * dy + dz * dz;
+                    if (dist < 1 )
+                    {
+                        sum += QuinticInterpolatingPolynomial(1 - sqrt(dist)) * *fp;    // 第四个fp 指向的就是每个点的权重    filter kernel在gabor noise里面变成了gabor kernel
+                    }
+                }
+            }
+        }
+    }
+    return sum / float(pulsenum);
+}
+
+struct NoiseImageGen2 : INode {//todo::image shape should same when pixel aspect ratio same, 只是更清晰了
+    // quick tofix source:
+    // https://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
+    template <typename T> int sgn(T val) {
+        return (T(0) < val) - (val < T(0));
+    }
+
+    virtual void apply() override {
+        auto perC = get_input2<bool>("noise per component");
+        auto image_size = get_input2<zeno::vec2i>("image size");
+        auto seed = get_input2<int>("seed");
+        auto turbulence = get_input2<int>("turbulence")+1; // tofix: think the case that turbulence = 0
+        auto roughness = get_input2<float>("roughness");
+        auto exponent = get_input2<float>("exponent");
+        auto frequency = get_input2<zeno::vec2f>("spatial frequency") * 0.001f; // tofix: mysterious scale?
+        auto amplitude = get_input2<zeno::vec4f>("amplitude");
+        auto pulsenum = get_input2<int>("pulsenum");
+
+        auto image = std::make_shared<PrimitiveObject>();
+        image->verts.resize(image_size[0] * image_size[1]);
+        auto &alpha = image->verts.add_attr<float>("alpha");
+
+#pragma omp parallel for
+        for (int i = 0; i < image_size[0] * image_size[1]; i++) {
+            vec2f p = vec2f(i % image_size[0], i / image_size[0]);
+            vec2f freq = frequency;
+            vec4f amp = amplitude;
+            float r = 0;
+            float g = 0;
+            float b = 0;
+            float nval = 0;
+            vec4f max_possible_amp = vec4f(0);
+            for (int j = 0; j < turbulence; j++) {
+                max_possible_amp += amp;
+                if(perC) {
+                    nval = scnoise(p[0] * freq[0], p[1] * freq[1], p[0] * freq[0], pulsenum, seed);
+                    r += nval * amp[0];
+                    nval = scnoise(p[0] * freq[0], p[0] * freq[0], p[1] * freq[1], pulsenum, seed);
+                    g += nval * amp[1];
+                    nval = scnoise(p[1] * freq[1], p[0] * freq[0], p[0] * freq[0], pulsenum, seed);
+                    b += nval * amp[2];
+                }
+                else{
+                    nval = scnoise(p[0] * freq[0], p[1] * freq[1], p[0] * freq[0], pulsenum, seed);
+                    r += nval * amp[0];
+                    g += nval * amp[1];
+                    b += nval * amp[2];
+                }
+                freq *= 2.0f;
+                amp *= roughness;
+            }
+
+            r /= max_possible_amp[0];
+            g /= max_possible_amp[1];
+            b /= max_possible_amp[2];
+            image->verts[i] = vec3f(
+                    sgn(r) * pow(abs(r), exponent) * amplitude[0],
+                    sgn(g) * pow(abs(g), exponent) * amplitude[1],
+                    sgn(b) * pow(abs(b), exponent) * amplitude[2]
+                );
+            if(perC) {
+                // tofix: ??? blackbox, is isolated from rgb,
+                // value does not change with rgb amplitude,
+                // Some random thought: maybe it has some relationship with rgb value when rgb amlitude set to 1;
+                alpha[i] = r+g+b * amplitude[3]; // r+g+b for placeholder
+            }
+            else{
+                alpha[i] = image->verts[i][0];
+            }
+        }
+        image->userData().set2("isImage", 1);
+        image->userData().set2("w", image_size[0]);
+        image->userData().set2("h", image_size[1]);
+        set_output("image", image);
+    }
+};
+ZENDEFNODE(NoiseImageGen2, {
+    {
+        {"vec2i", "image size", "1920,1080"},
+//        {"enum sparse_convolution", "type", "sparse_convolution"},
+        {"int", "seed", "1"},
+        {"bool", "noise per component", "1"},
+        {"int", "turbulence", "1"},
+        {"float", "roughness", "0.5"},
+        {"float", "exponent", "1"},
+        {"vec2f", "spatial frequency", "10,10"},
+        {"vec4f", "amplitude", "1.0,1.0,1.0,1.0"},
+        {"int", "pulsenum", "1"}
+        // image planes?
+    },
+    {
+        {"PrimitiveObject", "image"},
+    },
+    {},
+    {"image"},
+});
+
+//-----------------------------------  just for compatibility with old graph -----------------------------------
 float catrom2(float d, int griddist) {
     float x;
     int i;
@@ -841,7 +988,7 @@ float catrom2(float d, int griddist) {
 
 #define NEXT(h) (((h) + 1) & 255)
 
-float scnoise(float x, float y, float z, int pulsenum, int griddist) {
+float scnoise2(float x, float y, float z, int pulsenum, int g_seed) {
     static int initialized;
     float *fp = nullptr;
     int i, j, k, h, n;
@@ -851,7 +998,7 @@ float scnoise(float x, float y, float z, int pulsenum, int griddist) {
 
     /* Initialize the random impulse table if necessary. */
     if (!initialized) {
-        impulseTabInit();
+        impulseTabInit(g_seed);
         initialized = 1;
     }
     ix = floor(x);
@@ -862,18 +1009,17 @@ float scnoise(float x, float y, float z, int pulsenum, int griddist) {
     fz = z - iz;
 
     /* Perform the sparse convolution. */
-    for (i = -griddist; i <= griddist; i++) { //周围的grid ： 2*griddist+1
-        for (j = -griddist; j <= griddist; j++) {
-            for (k = -griddist; k <= griddist; k++) {         /* Compute voxel hash code. */
+    for (i = -1; i <= 1; i++) { //周围的grid ： 2*griddist+1
+        for (j = -1; j <= 1; j++) {
+            for (k = -1; k <= 1; k++) {         /* Compute voxel hash code. */
                 h = INDEX(ix + i, iy + j, iz + k);            //PSN
-                for (n = pulsenum; n > 0; n--, h = NEXT(h)) { /* Convolve filter and impulse. */
-                                                              //每个cell内随机产生pulsenum个impulse
+                    for (n = pulsenum; n > 0; n--, h = NEXT(h)) { /* Convolve filter and impulse. */
                     fp = &impulseTab[h * 4];                  // get impulse
                     dx = fx - (i + *fp++);                    //i + *fp++   周围几个晶胞的脉冲
                     dy = fy - (j + *fp++);
                     dz = fz - (k + *fp++);
                     distsq = dx * dx + dy * dy + dz * dz;
-                    sum += catrom2(distsq, griddist) *
+                    sum += catrom2(distsq, 1) *
                            *fp; // 第四个fp 指向的就是每个点的权重    filter kernel在gabor noise里面变成了gabor kernel。
                 }
             }
@@ -882,18 +1028,118 @@ float scnoise(float x, float y, float z, int pulsenum, int griddist) {
     return sum / pulsenum;
 }
 
+struct NoiseImageGen : INode {
+    // quick tofix source:
+    // https://stackoverflow.com/questions/1903954/is-there-a-standard-sign-function-signum-sgn-in-c-c
+    template <typename T> int sgn(T val) {
+        return (T(0) < val) - (val < T(0));
+    }
+
+    virtual void apply() override {
+        auto perC = get_input2<bool>("noise per component");
+        auto image_size = get_input2<zeno::vec2i>("image size");
+        auto seed = get_input2<int>("seed");
+        auto turbulence = get_input2<int>("turbulence")+1; // tofix: think the case that turbulence = 0
+        auto roughness = get_input2<float>("roughness");
+        auto exponent = get_input2<float>("exponent");
+        auto frequency = get_input2<zeno::vec2f>("spatial frequency") * 0.001f; // tofix: mysterious scale?
+        auto amplitude = get_input2<zeno::vec4f>("amplitude");
+
+        auto image = std::make_shared<PrimitiveObject>();
+        image->verts.resize(image_size[0] * image_size[1]);
+        auto &alpha = image->verts.add_attr<float>("alpha");
+
+#pragma omp parallel for
+        for (int i = 0; i < image_size[0] * image_size[1]; i++) {
+            vec2f p = vec2f(i % image_size[0], i / image_size[0]);
+            vec2f freq = frequency;
+            vec4f amp = amplitude;
+            float rough = roughness;
+
+            float r = 0;
+            float g = 0;
+            float b = 0;
+            float nval = 0;
+            vec4f max_possible_amp = vec4f(0);
+            for (int j = 0; j < turbulence; j++) {
+                max_possible_amp += amp;
+
+                if(perC) {
+                    nval = scnoise2(p[0] * freq[0], p[1] * freq[1], p[0] * freq[0], 3, seed);
+                    r += nval * amp[0];
+                    nval = scnoise2(p[0] * freq[0], p[0] * freq[0], p[1] * freq[1], 3, seed);
+                    g += nval * amp[1];
+                    nval = scnoise2(p[1] * freq[1], p[0] * freq[0], p[0] * freq[0], 3, seed);
+                    b += nval * amp[2];
+                }
+                else{
+                    nval = scnoise2(p[0] * freq[0], p[1] * freq[1], p[0] * freq[0], 3, seed);
+                    r += nval * amp[0];
+                    g += nval * amp[1];
+                    b += nval * amp[2];
+                }
+
+                freq *= 2.0f;
+                amp *= rough;
+            }
+
+            r /= max_possible_amp[0];
+            g /= max_possible_amp[1];
+            b /= max_possible_amp[2];
+            image->verts[i] = vec3f(
+                    sgn(r) * pow(abs(r), exponent) * amplitude[0],
+                    sgn(g) * pow(abs(g), exponent) * amplitude[1],
+                    sgn(b) * pow(abs(b), exponent) * amplitude[2]
+                );
+            if(perC) {
+                // tofix: ??? blackbox, is isolated from rgb,
+                // value does not change with rgb amplitude,
+                // Some random thought: maybe it has some relationship with rgb value when rgb amlitude set to 1;
+                alpha[i] = r+g+b * amplitude[3]; // r+g+b for placeholder
+            }
+            else{
+                alpha[i] = image->verts[i][0];
+            }
+        }
+        image->userData().set2("isImage", 1);
+        image->userData().set2("w", image_size[0]);
+        image->userData().set2("h", image_size[1]);
+        set_output("image", image);
+    }
+};
+ZENDEFNODE(NoiseImageGen, {
+    {
+        {"vec2i", "image size", "1920,1080"},
+//        {"enum sparse_convolution", "type", "sparse_convolution"},
+        {"int", "seed", "1"},
+        {"bool", "noise per component", "1"},
+        {"int", "turbulence", "1"},
+        {"float", "roughness", "0.5"},
+        {"float", "exponent", "1"},
+        {"vec2f", "spatial frequency", "10,10"},
+        {"vec4f", "amplitude", "1.0,1.0,1.0,1.0"},
+        // image planes?
+    },
+    {
+        {"PrimitiveObject", "image"},
+    },
+    {},
+    {"deprecated"},
+});
+//-----------------------------------  just for compatibility with old graph -----------------------------------
+
 struct erode_noise_sparse_convolution : INode {
     void apply() override {
 
         auto terrain = get_input<PrimitiveObject>("prim_2DGrid");
-        auto griddist = get_input2<int>("griddist");
         auto pulsenum = get_input2<int>("pulsenum");
         auto attrName = get_input2<std::string>("attrName:");
         auto attrType = get_input2<std::string>("attrType:");
+        auto seed = get_input2<int>("seed");
 
         if (!terrain->has_attr(attrName)) {
             if (attrType == "float3")
-                terrain->add_attr<vec3f>(attrName);
+                terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float")
                 terrain->add_attr<float>(attrName);
         }
@@ -903,18 +1149,18 @@ struct erode_noise_sparse_convolution : INode {
             zeno::log_error("no such data named '{}'.", posLikeAttrName);
         }
 
-        auto &pos = terrain->verts.attr<vec3f>(posLikeAttrName);
+        auto &pos = terrain->verts.attr<zeno::vec3f>(posLikeAttrName);
 
         terrain->attr_visit(attrName, [&](auto &arr) {
 #pragma omp parallel for
             for (int i = 0; i < arr.size(); i++) {
                 if constexpr (is_decay_same_v<decltype(arr[i]), vec3f>) {
-                    float x = scnoise(pos[i][0], pos[i][1], pos[i][2], pulsenum, griddist);
-                    float y = scnoise(pos[i][1], pos[i][2], pos[i][0], pulsenum, griddist);
-                    float z = scnoise(pos[i][2], pos[i][0], pos[i][1], pulsenum, griddist);
+                    float x = scnoise(pos[i][0], pos[i][1], pos[i][2], pulsenum, seed);
+                    float y = scnoise(pos[i][1], pos[i][2], pos[i][0], pulsenum, seed);
+                    float z = scnoise(pos[i][2], pos[i][0], pos[i][1], pulsenum, seed);
                     arr[i] = vec3f(x, y, z);
                 } else {
-                    arr[i] = scnoise(pos[i][0], pos[i][1], pos[i][2], pulsenum, griddist);
+                    arr[i] = scnoise(pos[i][0], pos[i][1], pos[i][2], pulsenum, seed);
                 }
             }
         });
@@ -926,7 +1172,7 @@ ZENDEFNODE(erode_noise_sparse_convolution, {/* inputs: */ {
                                                 "prim_2DGrid",
                                                 {"string", "posLikeAttrName", "pos"},
                                                 {"int", "pulsenum", "3"},
-                                                {"int", "griddist", "2"},
+                                                {"int", "seed", "1"},
                                             },
                                             /* outputs: */
                                             {
@@ -1081,7 +1327,7 @@ struct Noise_gabor_2d : INode {
         if (!terrain->verts.has_attr(posLikeAttrName)) {
             zeno::log_error("no such data named '{}'.", posLikeAttrName);
         }
-        auto &pos = terrain->verts.attr<vec3f>(posLikeAttrName);
+        auto &pos = terrain->verts.attr<zeno::vec3f>(posLikeAttrName);
         
         glm::vec3 ret{};
         auto K_ = 2.5f;  // act on spectrum
@@ -1136,7 +1382,8 @@ glm::vec3 noise_random3(glm::vec3 p) {
 
 float noise_mydistance(glm::vec3 a, glm::vec3 b, int t) {
     if (t == 0) {
-        return length(a - b);
+        float d = length(a - b);
+        return d*d;
     }
     else if (t == 1) {
         float xx = abs(a.x - b.x);
@@ -1197,7 +1444,7 @@ struct erode_noise_worley : INode {
         {
             zeno::log_error("no such data named '{}'.", posLikeAttrName);
         }
-        auto& pos = terrain->verts.attr<vec3f>(posLikeAttrName);
+        auto& pos = terrain->verts.attr<zeno::vec3f>(posLikeAttrName);
         auto jitter = get_input2<float>("celljitter");
         vec3f offset;
         if (!has_input("seed")) {
@@ -1206,7 +1453,7 @@ struct erode_noise_worley : INode {
             offset = vec3f(unif(gen), unif(gen), unif(gen));
         }
         else {
-            offset = get_input<NumericObject>("seed")->get<vec3f>();
+            offset = get_input<NumericObject>("seed")->get<zeno::vec3f>();
         }
 
         int fType = 0;
@@ -1224,7 +1471,7 @@ struct erode_noise_worley : INode {
         auto attrType = get_param<std::string>("attrType");
 
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -1318,7 +1565,7 @@ struct erode_hybridMultifractal_v1 : INode {
         auto& pos = terrain->verts;
 
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -1403,7 +1650,7 @@ struct erode_hybridMultifractal_v2 : INode {
         auto& pos = terrain->verts;
 
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -1486,7 +1733,7 @@ struct erode_hybridMultifractal_v3 : INode {
         auto& pos = terrain->verts;
 
         if (!terrain->has_attr(attrName)) {
-            if (attrType == "float3") terrain->add_attr<vec3f>(attrName);
+            if (attrType == "float3") terrain->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") terrain->add_attr<float>(attrName);
         }
 
@@ -1564,7 +1811,7 @@ struct erode_domainWarping_v1 : INode {
         auto attrType = get_param<std::string>("attrType");
         auto& pos = prim->verts;
         if (!prim->has_attr(attrName)) {
-            if (attrType == "float3") prim->add_attr<vec3f>(attrName);
+            if (attrType == "float3") prim->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") prim->add_attr<float>(attrName);
         }
 
@@ -1630,7 +1877,7 @@ struct erode_domainWarping_v2 : INode {
         auto attrType = get_param<std::string>("attrType");
         auto& pos = prim->verts;
         if (!prim->has_attr(attrName)) {
-            if (attrType == "float3") prim->add_attr<vec3f>(attrName);
+            if (attrType == "float3") prim->add_attr<zeno::vec3f>(attrName);
             else if (attrType == "float") prim->add_attr<float>(attrName);
         }
 
@@ -1692,10 +1939,10 @@ struct erode_voronoi : INode {
 
         auto attrName = get_param<std::string>("attrName");
         if (!prim->has_attr(attrName)) { prim->add_attr<float>(attrName); }
-        if (!prim->has_attr("minFeaturePointPos")) { prim->add_attr<vec3f>("minFeaturePointPos"); }
+        if (!prim->has_attr("minFeaturePointPos")) { prim->add_attr<zeno::vec3f>("minFeaturePointPos"); }
 
         auto& attr_voro = prim->attr<float>(attrName);
-        auto& attr_mFPP = prim->attr<vec3f>("minFeaturePointPos");
+        auto& attr_mFPP = prim->attr<zeno::vec3f>("minFeaturePointPos");
 
         auto& samplePoints = prim->verts;
         auto& featurePoints = featurePrim->verts;
@@ -1720,9 +1967,111 @@ ZENDEFNODE(erode_voronoi,
         } });
 
 
+    struct clusterset {
+        int id;
+        vec3f center;
+    };
+    struct clusterPointset {
+        int pointnumber;
+        int clusterid;
+    };
 
+void assign_clusters(std::vector<clusterPointset>& cpoints, const std::vector<clusterset>& clusters, PrimitiveObject *prim, std::string attrName) {
+#pragma omp parallel for
+    for (int i = 0; i < prim->verts.size(); i++) {
+        float smallest_dist = 1e10;
+        cpoints[i].pointnumber = i;
+        cpoints[i].clusterid = -1;
+        for (const auto& c : clusters) {
+            float dist = zeno::distance(c.center, prim->verts.attr<zeno::vec3f>(attrName)[i]);
+            if (dist < smallest_dist) {
+                smallest_dist = dist;
+                cpoints[i].clusterid = c.id;
+            }
+        }
+    }
+}
 
+struct Primcluster : INode {//todo:: just for color ramp now
+    void apply() override {
+        auto prim = get_input<PrimitiveObject>("prim");
+        auto attrName = get_input2<std::string>("ControlAttr");
+        auto numberofcluster = get_input2<int>("numberofcluster");
+        auto outputattr = get_input2<std::string>("ClusterAttr");
+        auto seed = get_input2<int>("seed");
+        auto cutoff = get_input2<int>("cutoff");
+        auto maxiter = get_input2<int>("maxiter");
 
+        std::default_random_engine generator(seed);
+        std::uniform_real_distribution<float> distribution(0.0, 1.0);
+        auto &attr = prim->verts.attr<zeno::vec3f>(attrName);//only test with vec3f now
+        
+
+        std::vector<clusterset> old_clusters;
+        int k = 0;
+        while (old_clusters.size() < numberofcluster) {
+            int rpoint = floor(distribution(generator) * prim->size());
+            clusterset c = {k, attr[rpoint]};
+            old_clusters.push_back(c);
+            k++;
+        }
+        
+        int _iter = 0;
+        vec3f new_center, old_center;
+        std::vector<clusterPointset> cpoints(prim->verts.size());
+        std::vector<zeno::vec3f> P_points;
+        while (_iter < maxiter) {
+            float diff = 0.0;
+            assign_clusters(cpoints, old_clusters, prim.get(), attrName);
+            std::vector<float> diffs(old_clusters.size(), 0.0f);
+            for (int i = 0; i < old_clusters.size(); i++) {
+                new_center = vec3f(0, 0, 0);
+                old_center = old_clusters[i].center;
+                P_points.clear();
+                for (const auto& cpoint : cpoints) {
+                    if (cpoint.clusterid == i) {
+                        P_points.push_back(attr[cpoint.pointnumber]);
+                        new_center += attr[cpoint.pointnumber];
+                    }
+                }
+                if (!P_points.empty()) {
+                    new_center /= P_points.size();
+                }
+                else{
+                    //new_center = vec3f(0, 0, 0);
+                    new_center = old_center;
+                }
+                diffs[i] = distance(new_center, old_center);
+                diff = std::max(diff, distance(new_center, old_center));
+                old_clusters[i].center = new_center;
+            }
+            if (diff < cutoff) {
+                break;
+            }
+            _iter++;
+        }
+        for(int i = 0; i < old_clusters.size(); i++){
+            prim->verts.add_attr<zeno::vec3f>(outputattr)[i] = old_clusters[i].center;
+        }
+        
+            set_output("prim", get_input("prim"));
+        }
+};
+ZENDEFNODE(Primcluster,
+    { /* inputs: */ {
+            "prim",
+            {"int", "numberofcluster", "10"},
+            {"int", "seed", "9"},
+            {"int", "cutoff", "5"},
+            {"int", "maxiter", "20"},
+            {"string", "ControlAttr", "pos"},
+            {"string", "ClusterAttr", "cluster"},
+        }, /* outputs: */ {
+            "prim",
+        }, /* params: */ {
+        }, /* category: */ {
+            "deprecated",
+        } });
 
 } // namespace
 } // namespace zeno

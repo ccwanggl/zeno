@@ -27,6 +27,18 @@ ZENO_HANDLE Zeno_CreateGraph(const std::string& name)
     return subgIdx.internalId();
 }
 
+ZENO_HANDLE Zeno_CreateGraph(const std::string& name, int type)
+{
+    IGraphsModel* pModel = GraphsManagment::instance().currentModel();
+    if (!pModel)
+        return Err_ModelNull;
+
+    const QString& qsName = QString::fromStdString(name);
+    pModel->newSubgraph(QString::fromStdString(name), (SUBGRAPH_TYPE)type);
+    QModelIndex subgIdx = pModel->index(qsName);
+    return subgIdx.internalId();
+}
+
 ZENO_ERROR Zeno_DeleteGraph(ZENO_HANDLE hSubgraph)
 {
     IGraphsModel* pModel = GraphsManagment::instance().currentModel();
@@ -82,6 +94,9 @@ ZENO_ERROR  Zeno_ForkGraph(
     }
 
     QModelIndex newForkNode = pModel->fork(subgIdx, toForkIdx);
+    if (!newForkNode.isValid()) {
+        return Err_SubgNotExist;
+    }
     const QString& newSubgName = newForkNode.data(ROLE_OBJNAME).toString();
     QModelIndex newSubgIdx = pModel->index(newSubgName);
 

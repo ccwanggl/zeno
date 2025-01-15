@@ -4,6 +4,7 @@
 #include <zeno/utils/string.h>
 #include "zeno/types/PrimitiveObject.h"
 #include "zeno/types/UserData.h"
+#include "zeno/utils/format.h"
 
 namespace zeno {
 
@@ -95,6 +96,50 @@ ZENDEFNODE(ShaderVecConvert, {
     {"shader"},
 });
 
+struct ShaderVecExtract : ShaderNodeClone<ShaderVecExtract> {
+    int ty{};
+
+    virtual int determineType(EmissionPass *em) override {
+        auto _type = get_param<std::string>("type");
+        em->determineType(get_input("in").get());
+        if (_type == "xyz" || _type == "xyz(srgb)") {
+            ty = 3;
+        }
+        else {
+            ty = 1;
+        }
+        return ty;
+    }
+
+    virtual void emitCode(EmissionPass *em) override {
+        std::string exp = em->determineExpr(get_input("in").get());
+        auto _type = get_param<std::string>("type");
+        if (_type == "xyz") {
+            em->emitCode(em->funcName("convertTo3(" + exp + ")"));
+        }
+        else if (_type == "xyz(srgb)") {
+            em->emitCode(em->funcName("pow(convertTo3(" + exp + "), 2.2f)"));
+        }
+        else if (_type == "1-w"){
+            em->emitCode(zeno::format("(1-{}.w)", exp));
+        }
+        else {
+            em->emitCode(exp + "." + _type);
+        }
+    }
+};
+
+ZENDEFNODE(ShaderVecExtract, {
+    {
+        {"in"},
+    },
+    {"out"},
+    {
+        {"enum x y z w xyz 1-w xyz(srgb)", "type", "xyz"},
+    },
+    {"shader"},
+});
+
 struct ShaderNormalMap : ShaderNodeClone<ShaderNormalMap> {
     virtual int determineType(EmissionPass *em) override {
         auto in1 = get_input("normalTexel");
@@ -126,9 +171,9 @@ ZENDEFNODE(ShaderNormalMap, {
 
 struct CalcCameraUp : INode {
     virtual void apply() override {
-        auto refUp = zeno::normalize(get_input2<vec3f>("refUp"));
-        auto pos = get_input2<vec3f>("pos");
-        auto target = get_input2<vec3f>("target");
+        auto refUp = zeno::normalize(get_input2<zeno::vec3f>("refUp"));
+        auto pos = get_input2<zeno::vec3f>("pos");
+        auto target = get_input2<zeno::vec3f>("target");
         vec3f view = zeno::normalize(target - pos);
         vec3f right = zeno::cross(view, refUp);
         vec3f up = zeno::cross(right, view);

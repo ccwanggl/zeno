@@ -2,6 +2,7 @@
 #define __RECORD_VIDEO_MGR_H__
 
 #include <QtWidgets>
+#include "common.h"
 
 struct VideoRecInfo
 {
@@ -20,6 +21,11 @@ struct VideoRecInfo
     bool exitWhenRecordFinish = false;
     bool bRecordByCommandLine = false;
     bool bAutoRemoveCache = false;
+    bool bExportEXR = false;
+
+    bool bSendToServer = false;
+    QString exePath;
+    QString taskName;
 };
 Q_DECLARE_METATYPE(VideoRecInfo);
 
@@ -32,22 +38,23 @@ public:
     RecordVideoMgr(QObject* parent = nullptr);
     ~RecordVideoMgr();
     void setRecordInfo(const VideoRecInfo& recInfo);
+    void initRecordInfo(const VideoRecInfo& recInfo);
+    VideoRecInfo getRecordInfo() const;
 
 public slots:
     void cancelRecord();
     void onFrameDrawn(int);
+    REC_RETURN_CODE endRecToExportVideo();
 
 signals:
     void frameFinished(int);
     void recordFinished(QString);
     void recordFailed(QString);
 
-private slots:
-    void endRecToExportVideo();
-
 private:
     Zenovis* getZenovis();
     void disconnectSignal();
+    void recordErrorImg(int currFrame);
 
     VideoRecInfo m_recordInfo;
     QStringList m_pics;

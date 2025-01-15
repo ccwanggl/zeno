@@ -5,9 +5,11 @@
 #include <QtOpenGL>
 #include "common.h"
 #include "recordvideomgr.h"
+#include "dock/docktabcontent.h"
 
 #include <viewportinteraction/transform.h>
 #include <viewportinteraction/picker.h>
+#include "zenovis/Camera.h"
 
 class ZTimeline;
 class ZenoMainWindow;
@@ -24,6 +26,7 @@ public:
     ViewportWidget(QWidget* parent = nullptr);
     ~ViewportWidget();
     void testCleanUp();
+    void cleanUpView();
     void initializeGL() override;
     void resizeGL(int nx, int ny) override;
     void paintGL() override;
@@ -38,16 +41,19 @@ public:
     void setSafeFrames(bool bLock, int nx, int ny);
     void updatePerspective();
     void updateCameraProp(float aperture, float disPlane);
-    void cameraLookTo(int dir);
+    void cameraLookTo(zenovis::CameraLookToDir dir);
     void clearTransformer();
     void changeTransformOperation(const QString& node);
     void changeTransformOperation(int mode);
     void changeTransformCoordSys();
+    void cleanUpScene();
     void setNumSamples(int samples);
     void setPickTarget(const std::string& prim_name);
     void bindNodeToPicker(const QModelIndex& node, const QModelIndex& subgraph, const std::string& sock_name);
     void unbindNodeFromPicker();
     void setSimpleRenderOption();
+    void setViewWidgetInfo(DockContentWidgetInfo& info);
+    void glDrawForCommandLine();
 
 signals:
     void frameRecorded(int);
@@ -57,6 +63,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
+    void enterEvent(QEvent * event) override;
     void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
@@ -70,6 +77,9 @@ private:
     QTimer* m_wheelEventDally;
     std::shared_ptr<zeno::Picker> m_picker;
     std::shared_ptr<zeno::FakeTransformer> m_fakeTrans;
+
+    std::tuple<int, int, bool, double, double, double>viewInfo{ 0, 0, true, 0, 0, 0 };
+    bool loadSettingFromZsg = false;
 
 public:
     int simpleRenderTime;

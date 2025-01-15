@@ -12,6 +12,7 @@
 #include "common_def.h"
 #include <zeno/funcs/ParseObjectFromUi.h>
 
+const char* g_setKey = "setKey";
 
 using namespace zeno::iotags;
 using namespace zeno::iotags::curve;
@@ -133,13 +134,14 @@ bool UiHelper::validateVariant(const QVariant& var, const QString& type)
     QVariant::Type varType = var.type();
 
     switch (control) {
-    case CONTROL_INT:   return QVariant::Int == varType;
+    case CONTROL_INT:   return (QVariant::Int == varType || QVariant::String == varType);
     case CONTROL_BOOL:  return (QVariant::Bool == varType || QVariant::Int == varType);
-    case CONTROL_FLOAT: return (QMetaType::Float == varType || QVariant::Double == varType);
+    case CONTROL_FLOAT: return (QMetaType::Float == varType || QVariant::Double == varType || QVariant::String == varType);
     case CONTROL_STRING:
     case CONTROL_WRITEPATH:
     case CONTROL_READPATH:
     case CONTROL_ENUM:
+    case CONTROL_DIRECTORY:
         return (QVariant::String == varType);
     case CONTROL_MULTILINE_STRING:
         return var.type() == QVariant::String;
@@ -152,13 +154,11 @@ bool UiHelper::validateVariant(const QVariant& var, const QString& type)
             return true;
         }
     }
-    case CONTROL_PURE_COLOR: {
-        return QVariant::Color == varType;
-    }
     case CONTROL_CURVE:
     {
         return (varType == QMetaType::User);
     }
+    case CONTROL_COLOR_VEC3F:
     case CONTROL_VEC2_FLOAT:
     case CONTROL_VEC2_INT:
     case CONTROL_VEC3_FLOAT:
@@ -167,7 +167,8 @@ bool UiHelper::validateVariant(const QVariant& var, const QString& type)
     case CONTROL_VEC4_INT:
     {
         if (varType == QVariant::UserType &&
-            var.userType() == QMetaTypeId<UI_VECTYPE>::qt_metatype_id())
+            (var.userType() == QMetaTypeId<UI_VECTYPE>::qt_metatype_id() || 
+              var.userType() == QMetaTypeId<UI_VECSTRING>::qt_metatype_id()))
         {
             return true;
         }
@@ -243,7 +244,10 @@ QVariant UiHelper::parseStringByType(const QString &defaultValue, const QString 
         bool bOk = false;
         float fVal = defaultValue.toFloat(&bOk);
         //TODO: need to check OK?
-        return fVal;
+        if (bOk)
+            return fVal;
+        else
+            return defaultValue;
     }
     case CONTROL_STRING:
     case CONTROL_WRITEPATH:
@@ -251,7 +255,9 @@ QVariant UiHelper::parseStringByType(const QString &defaultValue, const QString 
     case CONTROL_MULTILINE_STRING:
     case CONTROL_COLOR:
     case CONTROL_ENUM:
+    case CONTROL_DIRECTORY:
         return defaultValue;
+    case CONTROL_COLOR_VEC3F:
     case CONTROL_VEC2_FLOAT:
     case CONTROL_VEC2_INT:
     case CONTROL_VEC3_FLOAT:
@@ -303,7 +309,8 @@ QVariant UiHelper::parseTextValue(PARAM_CONTROL editCtrl, const QString& textVal
     case CONTROL_COLOR:
     case CONTROL_CURVE:
     case CONTROL_ENUM:
-	case CONTROL_STRING: varValue = textValue; break;
+	case CONTROL_STRING: 
+    case CONTROL_DIRECTORY:varValue = textValue; break;
 	}
     return varValue;
 }
@@ -387,7 +394,7 @@ QString UiHelper::getControlDesc(PARAM_CONTROL ctrl)
     case CONTROL_VEC3_INT:          return "Integer Vector 3";
     case CONTROL_VEC2_INT:          return "Integer Vector 2";
     case CONTROL_COLOR:             return "Color";
-    case CONTROL_PURE_COLOR: return "Pure Color";
+    case CONTROL_COLOR_VEC3F:       return "Color Vec3f";
     case CONTROL_CURVE:             return "Curve";
     case CONTROL_HSPINBOX:          return "SpinBox";
     case CONTROL_HDOUBLESPINBOX: return "DoubleSpinBox";
@@ -395,6 +402,8 @@ QString UiHelper::getControlDesc(PARAM_CONTROL ctrl)
     case CONTROL_SPINBOX_SLIDER:    return "SpinBoxSlider";
     case CONTROL_DICTPANEL:         return "Dict Panel";
     case CONTROL_GROUP_LINE:             return "group-line";
+    case CONTROL_PYTHON_EDITOR: return "PythonEditor";
+    case CONTROL_DIRECTORY: return "directory";
     default:
         return "";
     }
@@ -462,9 +471,9 @@ PARAM_CONTROL UiHelper::getControlByDesc(const QString& descName)
     {
         return CONTROL_COLOR;
     } 
-    else if (descName == "Pure Color") 
+    else if (descName == "Color Vec3f")
     {
-        return CONTROL_PURE_COLOR;
+        return CONTROL_COLOR_VEC3F;
     }
     else if (descName == "Curve")
     {
@@ -493,6 +502,14 @@ PARAM_CONTROL UiHelper::getControlByDesc(const QString& descName)
     else if (descName == "group-line")
     {
         return CONTROL_GROUP_LINE;
+    }
+    else if (descName == "PythonEditor")
+    {
+        return CONTROL_PYTHON_EDITOR;
+    }
+    else if (descName == "directory")
+    {
+        return CONTROL_DIRECTORY;
     }
     else
     {
@@ -546,7 +563,7 @@ QStringList UiHelper::getControlLists(const QString& type, bool isNodeUI)
     else if (type == "string") { ctrls = { CONTROL_STRING, CONTROL_MULTILINE_STRING, CONTROL_ENUM}; }
     else if (type == "vec2f") { ctrls = { CONTROL_VEC2_FLOAT }; }
     else if (type == "vec2i") { ctrls = { CONTROL_VEC2_INT }; }
-    else if (type == "vec3f") { ctrls = { CONTROL_VEC3_FLOAT }; }
+    else if (type == "vec3f") { ctrls = { CONTROL_VEC3_FLOAT, CONTROL_COLOR_VEC3F}; }
     else if (type == "vec3i") { ctrls = { CONTROL_VEC3_INT }; }
     else if (type == "vec4f") { ctrls = { CONTROL_VEC4_FLOAT }; }
     else if (type == "vec4i") { ctrls = { CONTROL_VEC4_INT }; }
@@ -554,13 +571,14 @@ QStringList UiHelper::getControlLists(const QString& type, bool isNodeUI)
     else if (type == "readpath") { ctrls = { CONTROL_READPATH }; }
     else if (type == "multiline_string") { ctrls = { CONTROL_STRING, CONTROL_MULTILINE_STRING }; }
     else if (type == "color") {   //color is more general than heatmap.
-        ctrls = {CONTROL_COLOR, CONTROL_PURE_COLOR};
+        ctrls = {CONTROL_COLOR};
     }
     else if (type == "curve") { ctrls = { CONTROL_CURVE }; }
     else if (type.startsWith("enum ")) {
         ctrls = { CONTROL_ENUM }; //todo
     }
     else if (type == "NumericObject") { ctrls = { CONTROL_FLOAT }; }
+    else if (type == "directory") { ctrls = { CONTROL_DIRECTORY }; }
     else { ctrls = { CONTROL_NONE }; }
 
     QStringList ctrlNames;
@@ -609,6 +627,8 @@ PARAM_CONTROL UiHelper::getControlByType(const QString &type)
         return CONTROL_MULTILINE_STRING;
     } else if (type == "color") {   //color is more general than heatmap.
         return CONTROL_COLOR;
+    } else if (type == "colorvec3f") {   //colorvec3f is for coloreditor, color is heatmap? ^^^^
+        return CONTROL_COLOR_VEC3F;
     } else if (type == "curve") {
         return CONTROL_CURVE;
     } else if (type.startsWith("enum ")) {
@@ -624,6 +644,9 @@ PARAM_CONTROL UiHelper::getControlByType(const QString &type)
         return CONTROL_NONE;
     } else if (type == "group-line") {
         return CONTROL_GROUP_LINE;
+    }
+    else if (type == "directory") {
+        return CONTROL_DIRECTORY;
     }
     else {
         zeno::log_trace("parse got undefined control type {}", type.toStdString());
@@ -655,12 +678,14 @@ QString UiHelper::getTypeByControl(PARAM_CONTROL ctrl)
     case CONTROL_WRITEPATH: return "string";
     case CONTROL_READPATH: return "string";
     case CONTROL_COLOR: return "color";     //todo: is vec3?
+    case CONTROL_COLOR_VEC3F: return "colorvec3f"; // ^^^ color vec is here
     case CONTROL_CURVE: return "curve";
     case CONTROL_ENUM: return "string";
     case CONTROL_HSLIDER:
     case CONTROL_HSPINBOX:
     case CONTROL_SPINBOX_SLIDER:
          return "int";
+    case CONTROL_DIRECTORY: return "string";
     default:
         return "";
     }
@@ -731,6 +756,32 @@ QString UiHelper::getSockName(const QString& sockPath)
         }
     }
     return "";
+}
+
+QString UiHelper::getNaiveParamPath(const QModelIndex& param, int dim)
+{
+    QString str = param.data(ROLE_OBJPATH).toString();
+    QString subgName, ident, paramPath;
+    getSocketInfo(str, subgName, ident, paramPath);
+    if (paramPath.startsWith("[node]/inputs/")) {
+        paramPath = paramPath.mid(QString("[node]/inputs/").length());
+    }
+    else if (paramPath.startsWith("[node]/params/")) {
+        paramPath = paramPath.mid(QString("[node]/params/").length());
+    }
+    else if (paramPath.startsWith("[node]/outputs/")) {
+        paramPath = "[o]" + paramPath.mid(QString("[node]/outputs/").length());
+    }
+    if (dim == 0) {
+        paramPath += "/x";
+    }
+    else if (dim == 1) {
+        paramPath += "/y";
+    }
+    else if (dim == 2) {
+        paramPath += "/z";
+    }
+    return QString("%1/%2").arg(ident).arg(paramPath);
 }
 
 QString UiHelper::getSockSubgraph(const QString& sockPath)
@@ -829,6 +880,7 @@ QVariant UiHelper::initVariantByControl(PARAM_CONTROL ctrl)
         case CONTROL_READPATH:
         case CONTROL_MULTILINE_STRING:
         case CONTROL_STRING:
+        case CONTROL_DIRECTORY:
             return "";
         case CONTROL_COLOR:
         {
@@ -846,6 +898,7 @@ QVariant UiHelper::initVariantByControl(PARAM_CONTROL ctrl)
         }
         case CONTROL_VEC3_FLOAT:
         case CONTROL_VEC3_INT:
+        case CONTROL_COLOR_VEC3F:
         {
             UI_VECTYPE vec(3);
             return QVariant::fromValue(vec);
@@ -1253,8 +1306,13 @@ QVariant UiHelper::parseJsonByType(const QString& descType, const rapidjson::Val
     {
         bool bSucc = false;
         int iVal = parseJsonNumeric(val, true, bSucc);
-        if (!bSucc)
-            return QVariant();  //will not be serialized when return null variant.
+        if (!bSucc) {
+            if (val.IsString()) {
+                return val.GetString();
+            } else {
+                return QVariant(); //will not be serialized when return null variant.
+            }
+        }
         res = iVal;
     }
     else if (descType == "float" ||
@@ -1262,8 +1320,13 @@ QVariant UiHelper::parseJsonByType(const QString& descType, const rapidjson::Val
     {
         bool bSucc = false;
         float fVal = parseJsonNumeric(val, true, bSucc);
-        if (!bSucc)
-            return QVariant();
+        if (!bSucc) {
+           if (val.IsString()) {
+                return val.GetString();
+           } else {
+                return QVariant();
+           }
+        }
         res = fVal;
     }
     else if (descType == "string" ||
@@ -1296,12 +1359,28 @@ QVariant UiHelper::parseJsonByType(const QString& descType, const rapidjson::Val
         {
             res = QVariant::fromValue(UI_VECTYPE(dim, 0));
             UI_VECTYPE vec;
+            UI_VECSTRING strVec;
             if (val.IsArray())
             {
                 auto values = val.GetArray();
                 for (int i = 0; i < values.Size(); i++)
                 {
-                    vec.append(values[i].GetFloat());
+                    if (values[i].IsFloat())
+                    {
+                        vec.append(values[i].GetFloat());
+                    }
+                    else if (values[i].IsDouble())
+                    {
+                        vec.append(values[i].GetDouble());
+                    }
+                    else if (values[i].IsInt())
+                    {
+                        vec.append(values[i].GetInt());
+                    }
+                    else if (values[i].IsString())
+                    {
+                        strVec.append(values[i].GetString());
+                    }
                 }
             }
             else if (val.IsString())
@@ -1322,7 +1401,10 @@ QVariant UiHelper::parseJsonByType(const QString& descType, const rapidjson::Val
                     }
                 }
             }
-            res = QVariant::fromValue(vec);
+            if (!vec.isEmpty())
+                res = QVariant::fromValue(vec);
+            else
+                res = QVariant::fromValue(strVec);
         }
         else
         {
@@ -1607,8 +1689,8 @@ void UiHelper::getAllParamsIndex(
     ZASSERT_EXIT(nodeParams);
 
     inputs = nodeParams->getInputIndice();
-    params = nodeParams->getInputIndice();
-    outputs = nodeParams->getInputIndice();
+    params = nodeParams->getParamIndice();
+    outputs = nodeParams->getOutputIndice();
 
     if (bEnsureSRCDST_lastKey)
     {
@@ -1809,6 +1891,59 @@ void UiHelper::reAllocIdents(const QString& targetSubgraph,
         const QString& newOutSock = UiHelper::constructObjPath(targetSubgraph, newOutputNode, outParamPath);
 
         outLinks.append(EdgeInfo(newOutSock, newInSock));
+    }
+}
+
+void UiHelper::renameNetLabels(const IGraphsModel* pModel, const QModelIndex& subgIdx, NODES_DATA& nodes)
+{
+    QMap<QString, QString> labelMap;
+    for (QString id : nodes.keys())
+    {
+        NODE_DATA& data = nodes[id];
+        OUTPUT_SOCKETS outputs = data[ROLE_OUTPUTS].value<OUTPUT_SOCKETS>();
+        QStringList labels = pModel->dumpLabels(subgIdx);
+        for (OUTPUT_SOCKET& outputSocket : outputs)
+        {
+            if (!outputSocket.info.netlabel.isEmpty() && labels.contains(outputSocket.info.netlabel))
+            {
+                QString newLabel = id + "/[o]" + outputSocket.info.name;
+                labelMap[outputSocket.info.netlabel] = newLabel;
+                outputSocket.info.netlabel = newLabel;
+            }
+            for (DICTKEY_INFO& info : outputSocket.info.dictpanel.keys)
+            {
+                if (!info.netLabel.isEmpty() && labels.contains(info.netLabel))
+                {
+                    QString newLabel = id + "/[o]" + outputSocket.info.name + "/" + info.key;
+                    labelMap[info.netLabel] = newLabel;
+                    info.netLabel = newLabel;
+                }
+            }
+        }
+        data[ROLE_OUTPUTS] = QVariant::fromValue(outputs);
+    }
+
+    for (QString id : nodes.keys())
+    {
+        NODE_DATA& data = nodes[id];
+        INPUT_SOCKETS inputs = data[ROLE_INPUTS].value<INPUT_SOCKETS>();
+        for (INPUT_SOCKET& inputSocket : inputs)
+        {
+            if (!inputSocket.info.netlabel.isEmpty() && labelMap.contains(inputSocket.info.netlabel))
+            {
+                QString newLabel = labelMap[inputSocket.info.netlabel];
+                inputSocket.info.netlabel = newLabel;
+            }
+            for (DICTKEY_INFO& info : inputSocket.info.dictpanel.keys)
+            {
+                if (!info.netLabel.isEmpty() && labelMap.contains(info.netLabel))
+                {
+                    QString newLabel = labelMap[info.netLabel];
+                    info.netLabel = newLabel;
+                }
+            }
+        }
+        data[ROLE_INPUTS] = QVariant::fromValue(inputs);
     }
 }
 

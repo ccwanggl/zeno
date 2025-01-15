@@ -295,7 +295,7 @@ ZENDEFNODE(str2num, {
     },
     /* category: */
     {
-        "WBTest",
+        "deprecated",
     }});
 
 
@@ -413,28 +413,6 @@ ZENO_DEFNODE(VisPrimAttrValue_Modify)( {
      {"WBTest"},
     });
 
-    ///////////////////  
-/* SetUserDate_M */
-///////////////////  
-struct SetUserData_M : zeno::INode {
-    virtual void apply() override {
-        auto object = get_input("object");
-        //auto key = get_param<std::string>("key");
-        auto key = get_input2<std::string>("key");
-        object->userData().set(key, get_input("data"));
-        set_output("object", std::move(object));
-    }
-};
-
-ZENDEFNODE(SetUserData_M, {
-    {{"string", "key", ""}, "object", "data"},
-    {"object"},
-    {
-        //{"string", "key", ""}
-    },
-    {"WBTest"},
-});
-
 
 // FDGather.cpp
 template <class T>
@@ -447,7 +425,7 @@ void sample2D_M(std::vector<zeno::vec3f> &coord, std::vector<T> &field, std::vec
                 zeno::vec3f bmin) {
     std::vector<T> temp(field.size());
 #pragma omp parallel for
-    for (size_t tidx = 0; tidx < coord.size(); tidx++) {
+    for (auto tidx = 0; tidx < coord.size(); tidx++) {
         auto uv = coord[tidx];
         auto uv2 = (uv - bmin) / h;
         uv2 = zeno::min(zeno::max(uv2, zeno::vec3f(0.01, 0.0, 0.01)), zeno::vec3f(nx - 1.01, 0.0, ny - 1.01));
@@ -458,7 +436,7 @@ void sample2D_M(std::vector<zeno::vec3f> &coord, std::vector<T> &field, std::vec
         temp[tidx] = lerp<T>(lerp<T>(field2[idx00], field2[idx01], cx), lerp<T>(field2[idx10], field2[idx11], cx), cy);
     }
 #pragma omp parallel for
-    for (size_t tidx = 0; tidx < coord.size(); tidx++) {
+    for (auto tidx = 0; tidx < coord.size(); tidx++) {
         field[tidx] = temp[tidx];
     }
 }
@@ -508,8 +486,9 @@ ZENDEFNODE(Grid2DSample_M, {
     },
     /* category: */
     {
-        "WBTest",
+        "deprecated",
     }});
+
 
 
 } // namespace

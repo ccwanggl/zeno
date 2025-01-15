@@ -32,17 +32,19 @@ public:
     SubGraphModel *subGraph(int idx) const;
     SubGraphModel *currentGraph();
     void switchSubGraph(const QString& graphName) override;
-    void newSubgraph(const QString& graphName) override;
+    void newSubgraph(const QString& graphName, SUBGRAPH_TYPE type = SUBGRAPH_TYPE::SUBGRAPH_NOR) override;
+    bool newMaterialSubgraph(const QModelIndex& subgIdx, const QString& graphName, const QPointF& pos) override;
     void initMainGraph() override;
     void renameSubGraph(const QString& oldName, const QString& newName) override;
     QItemSelectionModel* selectionModel() const;
     NODE_DESCS descriptors() const override;
-    bool appendSubnetDescsFromZsg(const QList<NODE_DESC>& descs) override;
+    bool appendSubnetDescsFromZsg(const QList<NODE_DESC>& descs, bool bImport = false) override;
     bool getDescriptor(const QString& descName, NODE_DESC& desc) override;
     bool updateSubgDesc(const QString& descName, const NODE_DESC& desc) override;
     //NODE_DESC
     void appendSubGraph(SubGraphModel* pGraph);
     QModelIndex fork(const QModelIndex& subgIdx, const QModelIndex& subnetNodeIdx) override;
+    QModelIndex forkMaterial(const QModelIndex& subgIdx, const QModelIndex& subnetNodeIdx, const QString&subgName, const QString& mtlid, const QString& mtlid_old) override;
     void removeGraph(int idx) override;
     bool isDirty() const override;
     void markDirty() override;
@@ -54,6 +56,7 @@ public:
     QModelIndex index(int row, int column, const QModelIndex& parent = QModelIndex()) const override;
     QModelIndex nodeIndex(uint32_t sid, uint32_t nodeid) override;
     QModelIndex subgIndex(uint32_t sid) override;
+    QModelIndex paramIndex(const QModelIndex& subgIdx, const QModelIndex& nodeIdx, const QString& name, bool bInput) override;
     QModelIndex index(const QString& subGraphName) const override;
     QModelIndex indexBySubModel(SubGraphModel* pSubModel) const;
     QModelIndex indexFromPath(const QString& path) override;
@@ -74,8 +77,8 @@ public:
     QModelIndex nodeIndex(const QString &ident) override;
     QModelIndex index(int r, const QModelIndex& subGpIdx) override;
     int itemCount(const QModelIndex& subGpIdx) const override;
-	void addNode(const NODE_DATA& nodeData, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
-	void appendNodes(const QList<NODE_DATA>& nodes, const QModelIndex& subGpIdx, bool enableTransaction = false);
+    void addNode(const NODE_DATA& nodeData, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
+    void appendNodes(const QList<NODE_DATA>& nodes, const QModelIndex& subGpIdx, bool enableTransaction = false);
     void setNodeData(const QModelIndex& nodeIndex, const QModelIndex& subGpIdx, const QVariant& value, int role) override;
     void importNodes(
             const QMap<QString, NODE_DATA>& nodes,
@@ -83,15 +86,17 @@ public:
             const QPointF& pos,
             const QModelIndex& subGpIdx,
             bool enableTransaction = false) override;
-	void removeNode(const QString& nodeid, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
-	void removeNode(int row, const QModelIndex& subGpIdx);
+    void removeNode(const QString& nodeid, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
+    void removeNode(int row, const QModelIndex& subGpIdx);
     void removeLink(const QModelIndex& linkIdx, bool enableTransaction = false) override;
     void removeLink(const QModelIndex& subgIdx, const EdgeInfo& linkIdx, bool enableTransaction = false) override;
-	void removeSubGraph(const QString& name) override;
+    void removeLegacyLink(const QModelIndex& linkIdx) override;
+    void removeSubGraph(const QString& name) override;
     QModelIndex addLink(const QModelIndex& subgIdx, const QModelIndex& fromSock, const QModelIndex& toSock, bool enableTransaction = false) override;
     QModelIndex addLink(const QModelIndex& subgIdx, const EdgeInfo& info, bool enableTransaction = false) override;
+    void addLegacyLink(const QModelIndex& subgIdx, const QModelIndex& fromSock, const QModelIndex& toSock);
 
-	void updateParamInfo(const QString& id, PARAM_UPDATE_INFO info, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
+    void updateParamInfo(const QString& id, PARAM_UPDATE_INFO info, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
     void updateSocketDefl(const QString& id, PARAM_UPDATE_INFO info, const QModelIndex& subGpIdx, bool enableTransaction = false) override;
     void updateNodeStatus(const QString& nodeid, STATUS_UPDATE_INFO info, const QModelIndex& subgIdx, bool enableTransaction = false) override;
     void updateBlackboard(const QString &id, const QVariant &blackboard, const QModelIndex &subgIdx,
@@ -108,14 +113,16 @@ public:
 	void redo() override;
     QModelIndexList searchInSubgraph(const QString& objName, const QModelIndex& subgIdx) override;
     QModelIndexList subgraphsIndice() const override;
+    QModelIndexList subgraphsIndice(SUBGRAPH_TYPE type) const;
     LinkModel* linkModel(const QModelIndex& subgIdx) const override;
+    LinkModel* legacyLinks(const QModelIndex& subgIdx) const override;
     QModelIndex getSubgraphIndex(const QModelIndex& linkIdx);
     QRectF viewRect(const QModelIndex& subgIdx) override;
     QList<SEARCH_RESULT> search(
                         const QString &content,
                         int searchType,
                         int searchOpts,
-                        QVector<SubGraphModel*> vec = QVector<SubGraphModel *>()) override;
+                        QVector<SubGraphModel*> vec = QVector<SubGraphModel *>()) const override;
 	void collaspe(const QModelIndex& subgIdx) override;
 	void expand(const QModelIndex& subgIdx) override;
 
@@ -126,6 +133,8 @@ public:
     void endApiLevel() override;
     void setIOProcessing(bool bIOProcessing) override;
     bool IsIOProcessing() const override;
+    void setIOImporting(bool bIOImporting) override;
+    bool IsIOImporting() const override;
     QModelIndexList findSubgraphNode(const QString& subgName) override;
     int ModelSetData(
         const QPersistentModelIndex& idx,
@@ -133,14 +142,32 @@ public:
         int role,
         const QString& comment = "") override;
     int undoRedo_updateSubgDesc(const QString &descName, const NODE_DESC &desc) override;
-    bool addExecuteCommand(QUndoCommand* pCommand) override;
+    bool addExecuteCommand(QUndoCommand* pCommand) override; 
     void setIOVersion(zenoio::ZSG_VERSION ver) override;
     zenoio::ZSG_VERSION ioVersion() const override;
     void setApiRunningEnable(bool bEnable) override;
     bool isApiRunningEnable() const override;
     bool setCustomName(const QModelIndex &subgIdx, const QModelIndex &Idx, const QString &value) const override;
     void markNodeDataChanged(const QModelIndex& idx) override;
+    void markNotDescNode(const QString& nodeid) override;
+    QStringList getNotDescNodes() const override;
     void clearNodeDataChanged() override;
+    QStringList subgraphsName() const override;
+
+    void addNetLabel(const QModelIndex& subgIdx, const QModelIndex& sock, const QString& name) override;
+    void removeNetLabel(const QModelIndex& subgIdx, const QModelIndex& trigger) override;
+    void updateNetLabel(const QModelIndex& subgIdx, const QModelIndex& trigger, const QString& oldName, const QString& newName, bool enableTransaction = false) override;
+
+    bool addCommandParam(const QString& path, const CommandParam& val) override;
+    void removeCommandParam(const QString& path) override;
+    bool updateCommandParam(const QString& path, const CommandParam& newVal) override;
+    FuckQMap<QString, CommandParam> commandParams() const override;
+
+    QModelIndex getNetOutput(const QModelIndex& subgIdx, const QString& name) const override;
+    QList<QModelIndex> getNetInputs(const QModelIndex& subgIdx, const QString& name) const override;
+    QStringList dumpLabels(const QModelIndex& subgIdx) const override;
+    void addNetLabel_impl(const QModelIndex& subgIdx, const QModelIndex& sock, const QString& name, bool enableTransaction = false);
+    void removeNetLabel_impl(const QModelIndex& subgIdx, const QModelIndex& trigger, const QString& name, bool enableTransaction = false);
 
 signals:
     void graphRenamed(const QString& oldName, const QString& newName);
@@ -194,7 +221,12 @@ private:
 
     //LinkModel* m_linkModel;
     QHash<QString, LinkModel*> m_linksGroup;
-    QList<QPersistentModelIndex> m_changedNodes;
+    QHash<QString, LinkModel*> m_legacyLinks;
+    QSet<QPersistentModelIndex> m_changedNodes;
+
+    QStringList m_unVersionNodes;
+
+    FuckQMap<QString, CommandParam> m_commandParams;//key:path  value:name
 
     NODE_DESCS m_nodesDesc;
     NODE_DESCS m_subgsDesc;
@@ -205,6 +237,7 @@ private:
     int m_apiLevel;
     bool m_dirty;
     bool m_bIOProcessing;
+    bool m_bIOImporting;
     bool m_bApiEnableRun;
     zenoio::ZSG_VERSION m_version;
 

@@ -19,6 +19,7 @@ set(ZENO_EXTENSIONS
     DemBones
     FBX
     Alembic
+    GLTF
     LSystem
     Skinning
     SampleModel
@@ -29,6 +30,7 @@ set(ZENO_EXTENSIONS
     CUDA
     CuEulerian
     CuLagrange
+    PyZpc
     Audio
     ImgCV
     GUI
@@ -38,6 +40,11 @@ set(ZENO_EXTENSIONS
     Parameterization
     UnrealTool
     ChatZeno
+    RPC
+    Roads
+    Geometry
+    PluginPOC
+    Nemo
     )
 
 foreach (name IN ITEMS ${ZENO_EXTENSIONS})

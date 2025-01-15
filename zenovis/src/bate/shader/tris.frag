@@ -9,12 +9,15 @@ uniform mat4 mInvProj;
 uniform bool mSmoothShading;
 uniform bool mNormalCheck;
 uniform bool mRenderWireframe;
+uniform bool mCustomColor;
+uniform bool mUvMode;
 
 in vec3 position;
 in vec3 iColor;
 in vec3 iNormal;
 in vec3 iTexCoord;
 in vec3 iTangent;
+in vec3 posRWS;
 out vec4 fColor;
 
 void pixarONB(vec3 n, out vec3 b1, out vec3 b2) {
@@ -59,9 +62,12 @@ vec3 studioShading(vec3 albedo, vec3 view_dir, vec3 normal, vec3 tangent) {
 
     light_dir = normalize((mInvView * vec4(3., -5., 2., 0.)).xyz);
     color += vec3(0.15, 0.2, 0.22) * pbr(albedo, 0.48, 0.0, 1.0, normal, light_dir, view_dir);
-
-    color *= 1.2;
-    //color = pow(clamp(color, 0., 1.), vec3(1./2.2));
+    if (mCustomColor) {
+        color = pow(clamp(color, 0., 1.), vec3(1./2.2));
+    }
+    else {
+        color *= 1.2;
+    }
     return color;
 }
 
@@ -80,11 +86,15 @@ void main() {
     fColor = vec4(0.89, 0.57, 0.15, 1.0);
     return;
   }
+  if (mUvMode) {
+    fColor = vec4(0.8, 0.8, 0.8, 1.0);
+    return;
+  }
   vec3 normal;
   if (mSmoothShading) {
     normal = normalize(iNormal);
   } else {
-    normal = normalize(cross(dFdx(position), dFdy(position)));
+    normal = normalize(cross(dFdx(posRWS), dFdy(posRWS)));
   }
   vec3 viewdir = -calcRayDir(position);
   vec3 albedo = iColor;

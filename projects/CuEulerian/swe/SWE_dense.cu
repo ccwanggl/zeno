@@ -128,8 +128,8 @@ struct ZSSolveShallowWaterHeight : INode {
         auto h_old = pars.begin(height_attr);
         auto u = pars.begin(u_attr);
         auto w = pars.begin(w_attr);
-        zs::Vector<float> h_new_{nc, zs::memsrc_e::device, 0}, h_rk_{nc, zs::memsrc_e::device, 0},
-            flx_{nc, zs::memsrc_e::device, 0}, flz_{nc, zs::memsrc_e::device, 0};
+        zs::Vector<float> h_new_{nc, zs::memsrc_e::device}, h_rk_{nc, zs::memsrc_e::device},
+            flx_{nc, zs::memsrc_e::device}, flz_{nc, zs::memsrc_e::device};
 
         {
             auto h_new = h_new_.data();
@@ -421,7 +421,7 @@ struct ZSSolveShallowWaterMomentum : INode {
             adv_term += w_adv * scheme::HJ_WENO3(u_old[idx(i, j - upwind)], u_old[idx(i, j)], u_old[idx(i, j + upwind)],
                                                  u_old[idx(i, j + 2 * upwind)], w_adv, dx);
             h_f = 0.5f * (h[idx(i, j)] + h[idx(i - 1, j)]);
-            if (zs::abs(h_f) > zs::limits<float>::epsilon() * 10)
+            if (zs::abs(h_f) > zs::detail::deduce_numeric_epsilon<float>() * 10)
                 grad_term = gravity * ((h[idx(i, j)] - h[idx(i - 1, j)]) / dx + (B[idx(i, j)] - B[idx(i - 1, j)]) / dx);
             else
                 grad_term = 0;
@@ -440,7 +440,7 @@ struct ZSSolveShallowWaterMomentum : INode {
             adv_term += w_adv * scheme::HJ_WENO3(w_old[idx(i, j - upwind)], w_old[idx(i, j)], w_old[idx(i, j + upwind)],
                                                  w_old[idx(i, j + 2 * upwind)], w_adv, dx);
             h_f = 0.5f * (h[idx(i, j)] + h[idx(i, j - 1)]);
-            if (zs::abs(h_f) > zs::limits<float>::epsilon() * 10)
+            if (zs::abs(h_f) > zs::detail::deduce_numeric_epsilon<float>() * 10)
                 grad_term = gravity * ((h[idx(i, j)] - h[idx(i, j - 1)]) / dx + (B[idx(i, j)] - B[idx(i, j - 1)]) / dx);
             else
                 grad_term = 0;
@@ -474,8 +474,8 @@ struct ZSSolveShallowWaterMomentum : INode {
         auto h = pars.begin(height_attr);
         auto u_old = pars.begin(u_attr);
         auto w_old = pars.begin(w_attr);
-        zs::Vector<float> u_new_{nc, zs::memsrc_e::device, 0}, w_new_{nc, zs::memsrc_e::device, 0},
-            u_rk_{nc, zs::memsrc_e::device, 0}, w_rk_{nc, zs::memsrc_e::device, 0};
+        zs::Vector<float> u_new_{nc, zs::memsrc_e::device}, w_new_{nc, zs::memsrc_e::device},
+            u_rk_{nc, zs::memsrc_e::device}, w_rk_{nc, zs::memsrc_e::device};
 
         {
             auto u_new = u_new_.data();

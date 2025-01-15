@@ -124,7 +124,7 @@ struct ZSParticlesTwoWrangler : zeno::INode {
 
         auto &currentContext = Cuda::context(0);
         currentContext.setContext();
-        auto cudaPol = cuda_exec().device(0).sync(true);
+        auto cudaPol = cuda_exec().sync(true);
 
         /// symbols
         {
@@ -140,9 +140,9 @@ struct ZSParticlesTwoWrangler : zeno::INode {
                         opts.define_symbol(prefix + "pos", nchns);
                     else if (name == "v")
                         opts.define_symbol(prefix + "vel", nchns);
-                    opts.define_symbol(prefix + name.asString(), nchns);
+                    opts.define_symbol(prefix + std::string(name), nchns);
                 }
-                //def_sym(name.asString(), nchns);
+                //def_sym(std::string(name), nchns);
             };
             register_attrib_syms(props, "@");
             register_attrib_syms(props2, "@@");
@@ -236,7 +236,7 @@ struct ZSParticlesTwoWrangler : zeno::INode {
                            curPars.getPropertyOffset(name), curPars.numChannels());
 #endif
             }
-            auto daccessors = haccessors.clone({zs::memsrc_e::device, 0});
+            auto daccessors = haccessors.clone({zs::memsrc_e::device});
 
             /// params
             zs::Vector<zs::f32> hparams{prog->params.size()};
@@ -247,7 +247,7 @@ struct ZSParticlesTwoWrangler : zeno::INode {
                 auto value = parvals.at(it - parnames.begin());
                 hparams[i] = value;
             }
-            zs::Vector<zs::f32> dparams = hparams.clone({zs::memsrc_e::device, 0});
+            zs::Vector<zs::f32> dparams = hparams.clone({zs::memsrc_e::device});
 
             void *function;
             cuModuleGetFunction((CUfunction *)&function, (CUmodule)_cuModule, "zpc_particle_wrangler_kernel");

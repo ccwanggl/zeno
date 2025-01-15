@@ -75,11 +75,11 @@
 #ifndef CUDA_NVRTC_ENABLED
 #define CUDA_NVRTC_ENABLED 1
 #endif
-    //extern "C" const char *zeno_header_internal_optix_7_device_impl_exception_h();
-    //extern "C" const char *zeno_header_internal_optix_7_device_impl_transformations_h();
-    //extern "C" const char *zeno_header_internal_optix_7_device_impl_h();
-    //extern "C" const char *zeno_header_optix_7_device_h();
-    //extern "C" const char *zeno_header_optix_7_types_h();
+    //extern "C" const char *zeno_header_internal_optix_device_impl_exception_h();
+    //extern "C" const char *zeno_header_internal_optix_device_impl_transformations_h();
+    //extern "C" const char *zeno_header_internal_optix_device_impl_h();
+    //extern "C" const char *zeno_header_optix_device_h();
+    //extern "C" const char *zeno_header_optix_types_h();
 
 namespace sutil
 {
@@ -877,57 +877,15 @@ const char *lookupIncFile(const char *name) {
     return getIncFileTab().at(it - pathtab.begin());
 }
 
-static bool getPtxFromCuString( std::string&                    ptx,
-                                const char*                     sample_directory,
+inline bool getPtxFromCuString( std::string&                    ptx,
                                 const char*                     cu_source,
                                 const char*                     name,
                                 const char**                    log_string,
-                                const std::vector<const char*>& compiler_options)
+                                const std::vector<const char*>& options)
 {
     // Create program
-    nvrtcProgram prog = 0;
+    nvrtcProgram prog;
     NVRTC_CHECK_ERROR( nvrtcCreateProgram( &prog, cu_source, name, getIncFileTab().size(), getIncFileTab().data(), getIncPathTab().data() ) );
-
-    // Gather NVRTC options
-    std::vector<const char*> options;
-
-    //const char *abs_dirs[] = {SAMPLES_ABSOLUTE_INCLUDE_DIRS};
-    //const std::string base_dir = getSampleDir();
-
-    //// Set sample dir as the primary include path
-    //std::string sample_dir;
-    //if( sample_directory )
-    //{
-        //sample_dir = std::string( "-I" ) + base_dir + '/' + sample_directory;
-        //options.push_back( sample_dir.c_str() );
-    //}
-
-    //// Collect include dirs
-    //std::vector<std::string> include_dirs;
-    //const char*              abs_dirs[] = {SAMPLES_ABSOLUTE_INCLUDE_DIRS};
-    //const char*              rel_dirs[] = {SAMPLES_RELATIVE_INCLUDE_DIRS};
-
-    //for( const char* dir : abs_dirs )
-    //{
-        //include_dirs.push_back( std::string( "-I" ) + dir );
-    //}
-    //for( const char* dir : rel_dirs )
-    //{
-        //include_dirs.push_back( "-I" + base_dir + '/' + dir );
-    //}
-    //for( const std::string& dir : include_dirs)
-    //{
-        //options.push_back( dir.c_str() );
-    //}
-    //std::vector<std::string> fuckcpp;
-    //for( const char* dir : abs_dirs )
-    //{
-        //fuckcpp.push_back(std::string( "-I" ) + dir);
-        //options.push_back( fuckcpp.back().c_str() );
-    //}
-    
-    // Collect NVRTC options
-    std::copy( std::begin( compiler_options ), std::end( compiler_options ), std::back_inserter( options ) );
 
     // JIT compile CU to PTX
     const nvrtcResult compileRes = nvrtcCompileProgram( prog, (int)options.size(), options.data() );
@@ -1050,13 +1008,13 @@ static void getInputDataFromFile( std::string& ptx, const char* sample_name, con
 
 struct PtxSourceCache
 {
-    std::map<std::string, std::string*> map;
+    std::map< std::string, std::shared_ptr<std::string> > map;
     ~PtxSourceCache()
     {
-        for( std::map<std::string, std::string*>::const_iterator it = map.begin(); it != map.end(); ++it )
-            delete it->second;
+        map = {};
     }
 };
+
 static PtxSourceCache g_ptxSourceCache;
 
 static std::string ridincs(std::string s) {
@@ -1077,11 +1035,11 @@ static const char* getOptixHeader() {
 #  define __UNDEF_OPTIX_INCLUDE_INTERNAL_HEADERS_OPTIX_DEVICE_H__
 #endif
 )"
-        + ridincs(zeno_header_optix_7_types_h())
-        + ridincs(zeno_header_optix_7_device_h())
-        + ridincs(zeno_header_internal_optix_7_device_impl_exception_h())
-        + ridincs(zeno_header_internal_optix_7_device_impl_transformations_h())
-        + ridincs(zeno_header_internal_optix_7_device_impl_h())
+        + ridincs(zeno_header_optix_types_h())
+        + ridincs(zeno_header_optix_device_h())
+        + ridincs(zeno_header_internal_optix_device_impl_exception_h())
+        + ridincs(zeno_header_internal_optix_device_impl_transformations_h())
+        + ridincs(zeno_header_internal_optix_device_impl_h())
         + R"(
 #if defined( __UNDEF_OPTIX_INCLUDE_INTERNAL_HEADERS_OPTIX_DEVICE_H__ )
 #  undef __OPTIX_INCLUDE_INTERNAL_HEADERS__
@@ -1093,38 +1051,31 @@ static const char* getOptixHeader() {
 }
 #endif
 
-const char* getInputData( const char*                     sample,
-                          const char*                     sampleDir,
-                          const char*                     filename,
-                          const char*                     location,
-                          size_t&                         dataSize,
-                          bool &                          is_success,
-                          const char**                    log,
-                          const std::vector<const char*>& compilerOptions)
+const char* getCodePTX( const char*                     source,
+                        const char*                     macro,
+                        const char*                     name,
+                        size_t&                         dataSize,
+                        bool &                          is_success,
+                        const char**                    log,
+                        const std::vector<const char*>& compilerOptions)
 {
     if( log )
         *log = NULL;
 
-    std::string *                                 ptx, cu;
-    std::string                                   key  = std::string( filename ) + ";" + ( sample ? sample : "" );
-    std::map<std::string, std::string*>::iterator elem = g_ptxSourceCache.map.find( key );
+    std::shared_ptr<std::string> ptx {};
+    std::string key = (macro!=nullptr? std::string(macro):"") + std::string( source );
 
-    if( elem == g_ptxSourceCache.map.end() )
+    if( g_ptxSourceCache.map.count(key) == 0 )
     {
-        ptx = new std::string();
-#if CUDA_NVRTC_ENABLED
-        //getCuStringFromFile( cu, location, sampleDir, filename );
-        //cu.replace(cu.find("#include <optix.h>\n"), strlen("#include <optix.h>\n"), getOptixHeader());
-        is_success = getPtxFromCuString( *ptx, sampleDir, filename, location, log, compilerOptions );
-#else
-        getInputDataFromFile( *ptx, sample, filename );
-#endif
+        ptx = std::make_shared<std::string>();
+        is_success = getPtxFromCuString( *ptx, source, name, log, compilerOptions );
+
         if(is_success==true)
             g_ptxSourceCache.map[key] = ptx;
     }
     else
     {
-        ptx = elem->second;
+        ptx = g_ptxSourceCache.map[key];
         is_success = true;
     }
     dataSize = ptx->size();

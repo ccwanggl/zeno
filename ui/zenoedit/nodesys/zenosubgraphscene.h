@@ -39,6 +39,7 @@ public:
 
     // FIXME temp function for merge
     void selectObjViaNodes();
+    void updateKeyFrame();
 
 protected:
     void mousePressEvent(QGraphicsSceneMouseEvent *event) override;
@@ -63,7 +64,7 @@ public slots:
 private slots:
     void reload(const QModelIndex& subGpIdx);
     void clearLayout(const QModelIndex& subGpIdx);
-    void onSocketClicked(ZenoSocketItem* pSocketItem);
+    void onSocketClicked(ZenoSocketItem* pSocketItem, Qt::MouseButton button);
     void onNodePosChanged();
 
 private:
@@ -74,7 +75,8 @@ private:
     void onTempLinkClosed();
     ZenoNode* createNode(const QModelIndex& idx, const NodeUtilParam& params);
     void initLink(const QModelIndex& linkIdx);
-    void updateNodeStatus(bool &bOn, int option);
+    void updateNodeStatus(int option);
+    void removeNodeCache();
 
     NodeUtilParam m_nodeParams;
     QPersistentModelIndex m_subgIdx;      //index to the subgraphmodel or node in "graphsModel"
@@ -84,10 +86,6 @@ private:
     ZenoTempLink* m_tempLink;
 
     QVector<QPair<QString, bool>> m_selChanges;
-
-    bool m_bOnceOn;
-    bool m_bBypassOn;
-    bool m_bViewOn;
 };
 
 #endif

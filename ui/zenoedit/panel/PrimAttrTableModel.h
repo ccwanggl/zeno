@@ -20,10 +20,14 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
     void setModelData(zeno::PrimitiveObject* prim);
     void setSelAttr(std::string sel_attr_);
+    void setStrMapping(bool enable);
+
+    zeno::zany userDataByIndex(const QModelIndex& index) const;
 
 private:
     std::shared_ptr<zeno::PrimitiveObject> m_prim = nullptr;
     std::string sel_attr = "Vertex";
+    bool enable_str_mapping = false;
 
     QVariant vertexData(const QModelIndex &index) const;
     QVariant trisData(const QModelIndex &index) const;
@@ -34,6 +38,7 @@ private:
     QVariant loopsData(const QModelIndex &index) const;
     QVariant loopUVsData(const QModelIndex &index) const;
     QVariant uvsData(const QModelIndex &index) const;
+    QVariant userData(const zeno::zany& object) const;
 };
 
 

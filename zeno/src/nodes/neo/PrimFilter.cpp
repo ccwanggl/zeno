@@ -13,7 +13,14 @@ namespace zeno {
 static void primRevampVerts(PrimitiveObject *prim, std::vector<int> const &revamp);
 static void primRevampFaces(PrimitiveObject *prim, std::vector<uint8_t> const &unrevamp);
 
-ZENO_API void primFilterVerts(PrimitiveObject *prim, std::string tagAttr, int tagValue, bool isInversed, std::string revampAttrO, std::string method) {
+ZENO_API void primFilterVerts(PrimitiveObject *prim,
+                              std::string tagAttr,
+                              int tagValue,
+                              bool isInversed,
+                              std::string revampAttrO,
+                              std::string method,
+                              int* aux, int aux_size,
+                              bool use_aux) {
     if (method == "faces") {
         std::vector<uint8_t> unrevamp(prim->size());
         auto const &tagArr = prim->verts.attr<int>(tagAttr);
@@ -41,18 +48,27 @@ ZENO_API void primFilterVerts(PrimitiveObject *prim, std::string tagAttr, int ta
         }
     } else {
         std::vector<int> revamp;
-        revamp.reserve(prim->size());
-        auto const &tagArr = prim->verts.attr<int>(tagAttr);
-        if (!isInversed) {
+        if(aux_size==0 && use_aux == false) {
+          revamp.reserve(prim->size());
+          auto const &tagArr = prim->verts.attr<int>(tagAttr);
+          if (!isInversed) {
             for (int i = 0; i < prim->size(); i++) {
-                if (tagArr[i] == tagValue)
-                    revamp.emplace_back(i);
+              if (tagArr[i] == tagValue)
+                revamp.emplace_back(i);
             }
-        } else {
+          } else {
             for (int i = 0; i < prim->size(); i++) {
-                if (tagArr[i] != tagValue)
-                    revamp.emplace_back(i);
+              if (tagArr[i] != tagValue)
+                revamp.emplace_back(i);
             }
+          }
+        } else
+        {
+          revamp.resize(aux_size);
+          for(int i=0;i<aux_size;i++)
+          {
+            revamp[i] = aux[i];
+          }
         }
         primRevampVerts(prim, revamp);
         if (!revampAttrO.empty()) {
@@ -63,11 +79,72 @@ ZENO_API void primFilterVerts(PrimitiveObject *prim, std::string tagAttr, int ta
 
 template <class T>
 static void revamp_vector(std::vector<T> &arr, std::vector<int> const &revamp) {
-    std::vector<T> newarr(arr.size());
+    std::vector<T> newarr(revamp.size());
+#pragma omp parallel for
     for (int i = 0; i < revamp.size(); i++) {
         newarr[i] = arr[revamp[i]];
     }
     std::swap(arr, newarr);
+}
+
+void primKillDeadUVs(PrimitiveObject *prim) {
+    if (!(prim->loops.size() > 0 && prim->loops.attr_is<int>("uvs"))) {
+        return;
+    }
+    auto &uvs = prim->loops.attr<int>("uvs");
+    std::set<int> reached;
+    for (auto const &[start, len]: prim->polys) {
+        for (int i = start; i < start + len; i++) {
+            reached.insert(uvs[i]);
+        }
+    }
+    std::vector<int> revamp(reached.begin(), reached.end());
+    auto old_prim_size = prim->uvs.size();
+    prim->uvs.forall_attr<AttrAcceptAll>([&] (auto const &key, auto &arr) {
+        revamp_vector(arr, revamp);
+    });
+    prim->uvs.resize(revamp.size());
+
+    std::vector<int> unrevamp(old_prim_size);
+    for (int i = 0; i < revamp.size(); i++) {
+        unrevamp[revamp[i]] = i;
+    }
+
+    auto mock = [&] (int &ind) {
+        ind = unrevamp[ind];
+    };
+    for (auto const &[start, len]: prim->polys) {
+        for (int i = start; i < start + len; i++) {
+            mock(uvs[i]);
+        }
+    }
+}
+void primKillDeadLoops(PrimitiveObject *prim) {
+    if (prim->loops.size() == 0) {
+        return;
+    }
+    std::set<int> reached;
+    for (auto const &[start, len]: prim->polys) {
+        for (int i = start; i < start + len; i++) {
+            reached.insert(i);
+        }
+    }
+    std::vector<int> revamp(reached.begin(), reached.end());
+    auto old_prim_size = prim->loops.size();
+    prim->loops.forall_attr<AttrAcceptAll>([&] (auto const &key, auto &arr) {
+        revamp_vector(arr, revamp);
+    });
+    prim->loops.resize(revamp.size());
+
+    std::vector<int> unrevamp(old_prim_size);
+    for (int i = 0; i < revamp.size(); i++) {
+        unrevamp[revamp[i]] = i;
+    }
+    int count = 0;
+    for (auto &[start, len]: prim->polys) {
+        start = count;
+        count += len;
+    }
 }
 
 ZENO_API void primKillDeadVerts(PrimitiveObject *prim) {
@@ -130,6 +207,8 @@ ZENO_API void primKillDeadVerts(PrimitiveObject *prim) {
             mock(prim->loops[i]);
         }
     }
+    primKillDeadUVs(prim);
+    primKillDeadLoops(prim);
 }
 
 static void primRevampVerts(PrimitiveObject *prim, std::vector<int> const &revamp) {
@@ -275,7 +354,6 @@ static void primRevampVerts(PrimitiveObject *prim, std::vector<int> const &revam
 
     }
 }
-
 static void primRevampFaces(PrimitiveObject *prim, std::vector<uint8_t> const &unrevamp) {
     if ((0
             || prim->tris.size()

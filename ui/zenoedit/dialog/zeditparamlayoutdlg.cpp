@@ -16,6 +16,8 @@
 #include "iotags.h"
 #include <zenoui/style/zenostyle.h>
 #include <zenoui/comctrl/zspinboxslider.h>
+#include "zenoapplication.h"
+#include "zenomainwindow.h"
 
 static CONTROL_ITEM_INFO controlList[] = {
     {"Tab", CONTROL_NONE, "", ":/icons/parameter_control_tab.svg"},
@@ -27,6 +29,7 @@ static CONTROL_ITEM_INFO controlList[] = {
     {"Multiline String",    CONTROL_MULTILINE_STRING, "string", ":/icons/parameter_control_string.svg"},
     {"read path",           CONTROL_READPATH,       "string", ":/icons/parameter_control_fold.svg"},
     {"write path",          CONTROL_WRITEPATH,      "string", ":/icons/parameter_control_fold.svg"},
+    {"directory",          CONTROL_DIRECTORY,      "string", ":/icons/parameter_control_fold.svg"},
     {"Enum",                CONTROL_ENUM,           "string", ":/icons/parameter_control_enum.svg"},
     {"Float Vector 4",      CONTROL_VEC4_FLOAT,     "vec4f", ":/icons/parameter_control_floatVector4.svg"},
     {"Float Vector 3",      CONTROL_VEC3_FLOAT,     "vec3f", ":/icons/parameter_control_floatVector3.svg"},
@@ -35,7 +38,7 @@ static CONTROL_ITEM_INFO controlList[] = {
     {"Integer Vector 3",    CONTROL_VEC3_INT,       "vec3i", ":/icons/parameter_control_integerVector3.svg"},
     {"Integer Vector 2",    CONTROL_VEC2_INT,       "vec2i", ":/icons/parameter_control_integerVector2.svg"},
     {"Color",               CONTROL_COLOR,          "color", ":/icons/parameter_control_color.svg"},
-    {"Pure Color",          CONTROL_PURE_COLOR,     "color", ":/icons/parameter_control_color.svg"},
+    {"Color Vec3f",         CONTROL_COLOR_VEC3F,    "vec3f", ":/icons/parameter_control_color.svg"},
     {"Curve",               CONTROL_CURVE,          "curve", ":/icons/parameter_control_curve.svg"},
     {"SpinBox",             CONTROL_HSPINBOX,       "int", ":/icons/parameter_control_spinbox.svg"},
     {"DoubleSpinBox", CONTROL_HDOUBLESPINBOX, "float", ":/icons/parameter_control_spinbox.svg"},
@@ -139,14 +142,14 @@ ZEditParamLayoutDlg::ZEditParamLayoutDlg(QStandardItemModel* pModel, bool bNodeU
 
     m_model = qobject_cast<ViewParamModel*>(pModel);
     ZASSERT_EXIT(m_model);
-
-    m_bSubgraphNode = m_pGraphsModel->IsSubGraphNode(m_nodeIdx) && m_model->isNodeModel();
+    bool isNodeParamModel = qobject_cast<NodeParamModel*>(m_model) != nullptr;
+    m_bSubgraphNode = m_pGraphsModel->IsSubGraphNode(m_nodeIdx) && isNodeParamModel;
     m_subgIdx = m_nodeIdx.data(ROLE_SUBGRAPH_IDX).toModelIndex();
 
     if (bNodeUI)
     {
         m_ui->m_coreMappingWidget->hide();
-        m_proxyModel = new NodeParamModel(m_subgIdx, m_model->nodeIdx(), m_pGraphsModel, true, this);
+        m_proxyModel = new NodeParamModel(m_model->nodeIdx(), m_pGraphsModel, this);
     }
     else
     {
@@ -187,6 +190,7 @@ ZEditParamLayoutDlg::ZEditParamLayoutDlg(QStandardItemModel* pModel, bool bNodeU
     connect(m_ui->editStep, SIGNAL(editingFinished()), this, SLOT(onStepEditFinished()));
     connect(m_ui->cbControl, SIGNAL(currentIndexChanged(int)), this, SLOT(onControlItemChanged(int)));
     connect(m_ui->cbTypes, SIGNAL(currentIndexChanged(int)), this, SLOT(onTypeItemChanged(int)));
+    connect(m_ui->m_pathFilterEdit, SIGNAL(editingFinished()), this, SLOT(onPathFilterFinished()));
 
     m_ui->itemsTable->setHorizontalHeaderLabels({ tr("Item Name") });
     connect(m_ui->itemsTable, SIGNAL(cellChanged(int, int)), this, SLOT(onComboTableItemsCellChanged(int, int)));
@@ -211,14 +215,17 @@ ZEditParamLayoutDlg::ZEditParamLayoutDlg(QStandardItemModel* pModel, bool bNodeU
         auto item = m_ui->itemsTable->currentItem();
         if (item) {
             int row = item->row() - 1;
+            QTableWidgetItem* pPreItem = m_ui->itemsTable->item(row, 0);
+            if (!pPreItem)
+                return;
             disconnect(m_ui->itemsTable, SIGNAL(cellChanged(int, int)), this,
                        SLOT(onComboTableItemsCellChanged(int, int)));
             QString text = item->text();
-            item->setText(m_ui->itemsTable->item(row, 0)->text());
+            item->setText(pPreItem->text());
             connect(m_ui->itemsTable, SIGNAL(cellChanged(int, int)), this,
                     SLOT(onComboTableItemsCellChanged(int, int)));
-            m_ui->itemsTable->item(row, 0)->setText(text);
-            m_ui->itemsTable->setCurrentItem(m_ui->itemsTable->item(row, 0));
+            pPreItem->setText(text);
+            m_ui->itemsTable->setCurrentItem(pPreItem);
         }
     });
 
@@ -347,7 +354,8 @@ void ZEditParamLayoutDlg::onComboTableItemsCellChanged(int row, int column)
     if (row == m_ui->itemsTable->rowCount() - 1)
     {
         m_ui->itemsTable->insertRow(m_ui->itemsTable->rowCount());
-        m_ui->m_pUpButton->setEnabled(true);
+        if (row != 0)
+            m_ui->m_pUpButton->setEnabled(true);
     }
 
     //update control.
@@ -452,6 +460,9 @@ void ZEditParamLayoutDlg::onTreeCurrentChanged(const QModelIndex& current, const
                     return UiHelper::initVariantByControl(ctrl);
                 }
                 return pCurrentItem->data(ROLE_PARAM_VALUE);
+            };
+            cbSets.cbSwitch = [=](bool bOn) {
+                zenoApp->getMainWindow()->setInDlgEventLoop(bOn);
             };
             QWidget *valueControl = zenoui::createWidget(deflVal, ctrl, dataType, cbSets, controlProperties);
             if (valueControl) {
@@ -643,6 +654,19 @@ void ZEditParamLayoutDlg::switchStackProperties(int ctrl, VParamItem* pItem)
         m_ui->editStep->setText(QString::number(info.step));
         m_ui->editMin->setText(QString::number(info.min));
         m_ui->editMax->setText(QString::number(info.max));
+    } else if (ctrl == CONTROL_READPATH || ctrl == CONTROL_WRITEPATH)
+    {
+        m_ui->stackProperties->setCurrentIndex(3);
+        QVariantMap pros = controlProperties.toMap();
+        if (pros.find("filter") != pros.end())
+        {
+            QString filter = pros["filter"].toString();
+            m_ui->m_pathFilterEdit->setText(filter);
+        }
+        else
+        {
+            m_ui->m_pathFilterEdit->setText("");
+        }
     } else {
         m_ui->stackProperties->setCurrentIndex(0);
     }
@@ -672,7 +696,7 @@ void ZEditParamLayoutDlg::addControlGroup(bool bInput, const QString &name, PARA
                 continue;
         NodeParamModel *nodeParams = QVariantPtr<NodeParamModel>::asPtr(subgNode.data(ROLE_NODE_PARAMS));
         nodeParams->setAddParam(bInput ? PARAM_INPUT : PARAM_OUTPUT, name, "", QVariant(), ctrl, QVariant(),
-                                SOCKPROP_NORMAL);
+            SOCKPROP_GROUP_LINE);
     }
 }
 
@@ -831,6 +855,26 @@ void ZEditParamLayoutDlg::onMaxEditFinished()
     updateSliderInfo();
 }
 
+void ZEditParamLayoutDlg::onPathFilterFinished()
+{
+    QModelIndex layerIdx = m_ui->paramsView->currentIndex();
+    if (!layerIdx.isValid() && layerIdx.data(ROLE_VPARAM_TYPE) != VPARAM_PARAM)
+        return;
+
+    CONTROL_PROPERTIES properties = layerIdx.data(ROLE_VPARAM_CTRL_PROPERTIES).value<CONTROL_PROPERTIES>();
+    QString filter = m_ui->m_pathFilterEdit->text();
+    properties["filter"] = filter;
+    proxyModelSetData(layerIdx, properties, ROLE_VPARAM_CTRL_PROPERTIES);
+    //update control.
+    QLayoutItem* pLayoutItem = m_ui->gridLayout->itemAtPosition(rowValueControl, 1);
+    if (pLayoutItem) {
+        QWidget* pControl = pLayoutItem->widget();
+        if (pControl) {
+            pControl->setProperty("filter", filter);
+        }
+    }
+}
+
 void ZEditParamLayoutDlg::onControlItemChanged(int idx)
 {
     const QString& controlName = m_ui->cbControl->itemText(idx);
@@ -858,6 +902,9 @@ void ZEditParamLayoutDlg::onControlItemChanged(int idx)
         value = UiHelper::initDefaultValue(dataType);
     QVariant controlProperties = layerIdx.data(ROLE_VPARAM_CTRL_PROPERTIES);
     cbSets.cbGetIndexData = [=]() -> QVariant { return UiHelper::initVariantByControl(ctrl); };
+    cbSets.cbSwitch = [=](bool bOn) {
+        zenoApp->getMainWindow()->setInDlgEventLoop(bOn);
+    };
     QWidget *valueControl = zenoui::createWidget(value, ctrl, dataType, cbSets, controlProperties);
     if (valueControl) {
         valueControl->setEnabled(m_pGraphsModel->IsSubGraphNode(m_nodeIdx));
@@ -893,6 +940,9 @@ void ZEditParamLayoutDlg::onTypeItemChanged(int idx)
     };
     QVariant controlProperties = layerIdx.data(ROLE_VPARAM_CTRL_PROPERTIES);
     cbSets.cbGetIndexData = [=]() -> QVariant { return pItem->data(ROLE_PARAM_VALUE); };
+    cbSets.cbSwitch = [=](bool bOn) {
+        zenoApp->getMainWindow()->setInDlgEventLoop(bOn);
+    };
     QWidget *valueControl = zenoui::createWidget(pItem->data(ROLE_PARAM_VALUE), pItem->m_ctrl, dataType, cbSets, controlProperties);
     if (valueControl) {
         valueControl->setEnabled(m_pGraphsModel->IsSubGraphNode(m_nodeIdx));
@@ -1037,12 +1087,13 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                 for (auto idx : subgNodes)
                 {
                     NodeParamModel* nodeParams = QVariantPtr<NodeParamModel>::asPtr(idx.data(ROLE_NODE_PARAMS));
+                    ZASSERT_EXIT(nodeParams);
                     VParamItem* pGroup = bSubInput ? nodeParams->getInputs() : nodeParams->getOutputs();
                     ZASSERT_EXIT(pGroup);
                     QModelIndex parent = pGroup->index();
                     nodeParams->moveRow(parent, srcRow, parent, dstRow);
                 }
-                if (!m_model->isNodeModel()) 
+                if (qobject_cast<NodeParamModel*>(m_model) == nullptr)
                 {
                     PanelParamModel *panelParams = QVariantPtr<PanelParamModel>::asPtr(m_model->nodeIdx().data(ROLE_PANEL_PARAMS));
                     ZASSERT_EXIT(panelParams);
@@ -1070,6 +1121,7 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                         //get subinput name idx, update its value, and then sync to all subgraph node.
                         const QModelIndex &subInOutput = UiHelper::findSubInOutputIdx(m_pGraphsModel, bSubInput, oldName, subgIdx);
                         NodeParamModel *nodeParams = QVariantPtr<NodeParamModel>::asPtr(subInOutput.data(ROLE_NODE_PARAMS));
+                        ZASSERT_EXIT(nodeParams);
                         const QModelIndex &nameIdx = nodeParams->getParam(PARAM_PARAM, "name");
                         //update the value on "name" in SubInput/SubOutput.
                         m_pGraphsModel->ModelSetData(nameIdx, newName, ROLE_PARAM_VALUE);
@@ -1092,6 +1144,7 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                         const QModelIndex &subInOutput =
                          UiHelper::findSubInOutputIdx(m_pGraphsModel, bSubInput, pTarget->m_name, subgIdx);
                         NodeParamModel *nodeParams = QVariantPtr<NodeParamModel>::asPtr(subInOutput.data(ROLE_NODE_PARAMS));
+                        ZASSERT_EXIT(nodeParams);
                         const QModelIndex &typelIdx = nodeParams->getParam(PARAM_PARAM, "type");
                         m_pGraphsModel->ModelSetData(typelIdx, typeDesc, ROLE_PARAM_VALUE);
                     } else {
@@ -1106,6 +1159,7 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                         //get subinput defl idx, update its value, and then sync to all subgraph node.
                         const QModelIndex &subInOutput = UiHelper::findSubInOutputIdx(m_pGraphsModel, bSubInput, pTarget->m_name, subgIdx);
                         NodeParamModel *nodeParams = QVariantPtr<NodeParamModel>::asPtr(subInOutput.data(ROLE_NODE_PARAMS));
+                        ZASSERT_EXIT(nodeParams);
                         const QModelIndex &deflIdx = nodeParams->getParam(PARAM_PARAM, "defl");
                         //update the value on "defl" in SubInput/SubOutput.
                         m_pGraphsModel->ModelSetData(deflIdx, value, ROLE_PARAM_VALUE);
@@ -1121,6 +1175,7 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                         //get subinput defl idx, update its value, and then sync to all subgraph node.
                         const QModelIndex &subInOutput = UiHelper::findSubInOutputIdx(m_pGraphsModel, bSubInput, pTarget->m_name, subgIdx);
                         NodeParamModel *nodeParams = QVariantPtr<NodeParamModel>::asPtr(subInOutput.data(ROLE_NODE_PARAMS));
+                        ZASSERT_EXIT(nodeParams);
                         const QModelIndex &deflIdx = nodeParams->getParam(PARAM_PARAM, "defl");
                         //update the control on "defl" in SubInput/SubOutput.
                         m_pGraphsModel->ModelSetData(deflIdx, ctrl, ROLE_PARAM_CTRL);
@@ -1175,15 +1230,13 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
             {
                 if (m_bSubgraphNode) 
                 {
+                    int srcRow = 0;
                     if (ctrl == CONTROL_GROUP_LINE) 
                     {
                         addControlGroup(bSubInput, name, ctrl);
                         QStandardItem *pNewItem = pCurrent->clone();
                         appliedItem->appendRow(pNewItem);
-                        //move the new item to the r-th position.
-                        QModelIndex parent = appliedItem->index();
-                        int dstRow = appliedItem->rowCount() - 1;
-                        m_model->moveRow(parent, dstRow, parent, r);
+                        srcRow = appliedItem->rowCount() - 1;
                     } 
                     else 
                     {
@@ -1211,14 +1264,43 @@ void ZEditParamLayoutDlg::applyForItem(QStandardItem* proxyItem, QStandardItem* 
                         m_pGraphsModel->addNode(node, subgIdx, true);
 
                         //the newItem is created just now, after adding the subgraph node.
-                        int dstRow = 0;
-                        VParamItem* newItem = pTargetGroup->getItem(name, &dstRow);
+                        
+                        VParamItem* newItem = pTargetGroup->getItem(name, &srcRow);
                         ZASSERT_EXIT(newItem);
                         pCurrent->m_uuid = newItem->m_uuid;
+                    }
 
-                        //move the new item to the r-th position.
-                        QModelIndex parent = pTargetGroup->index();
-                        m_model->moveRow(parent, dstRow, parent, r);
+                    if (srcRow != r)
+                    {
+                        //update desc.
+                        NODE_DESC desc;
+                        bool ret = m_pGraphsModel->getDescriptor(subgName, desc);
+                        if (bSubInput) {
+                            int sz = desc.inputs.size();
+                            if (sz > r && sz > srcRow) {
+                                desc.inputs.move(srcRow, r);
+                                m_pGraphsModel->updateSubgDesc(subgName, desc);
+                            }
+                        }
+                        else {
+                            int sz = desc.outputs.size();
+                            if (sz > r && sz > srcRow) {
+                                desc.outputs.move(srcRow, r);
+                                m_pGraphsModel->updateSubgDesc(subgName, desc);
+                            }
+                        }
+
+                        //update the corresponding order for every subgraph node.
+                        QModelIndexList subgNodes = m_pGraphsModel->findSubgraphNode(subgName);
+                        for (const auto& idx : subgNodes)
+                        {
+                            NodeParamModel* nodeParams = QVariantPtr<NodeParamModel>::asPtr(idx.data(ROLE_NODE_PARAMS));
+                            ZASSERT_EXIT(nodeParams);
+                            VParamItem* pGroup = bSubInput ? nodeParams->getInputs() : nodeParams->getOutputs();
+                            ZASSERT_EXIT(pGroup);
+                            QModelIndex parent = pGroup->index();
+                            nodeParams->moveRow(parent, srcRow, parent, r);
+                        }
                     }
 
                 } 

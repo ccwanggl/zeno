@@ -30,20 +30,21 @@ struct Session : zeno::disable_copy {
     void set_window_size(int nx, int ny);
     void set_window_size(int nx, int ny, zeno::vec2i offset);
     std::tuple<int, int> get_window_size();
+    zeno::vec2i get_viewportOffset();
     void set_curr_frameid(int frameid);
     int get_curr_frameid();
     void set_show_grid(bool flag);
-    void look_perspective(float cx, float cy, float cz, float theta,
-                          float phi, float radius, float fov,
-                          bool ortho_mode, float aperture, float focalPlaneDistance);
+    void set_uv_mode(bool enable);
+    void look_perspective();
     void look_to_dir(float cx, float cy, float cz,
                      float dx, float dy, float dz,
                      float ux, float uy, float uz);
-    void do_screenshot(std::string path, std::string type);
+    void do_screenshot(std::string path, std::string type, bool bOptix = false);
     //void new_frame_offline(std::string path, int nsamples);
     void set_background_color(float r, float g, float b);
     std::tuple<float, float, float> get_background_color();
     void set_num_samples(int num_samples);
+    void set_viewport_point_size_scale(double scale);
     void set_enable_gi(bool enable_gi);
     void set_smooth_shading(bool smooth);
     void set_normal_check(bool check);

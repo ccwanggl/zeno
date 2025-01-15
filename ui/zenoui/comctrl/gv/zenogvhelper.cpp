@@ -90,8 +90,13 @@ void ZenoGvHelper::setValue(QGraphicsItem* item, PARAM_CONTROL ctrl, const QVari
             else if (ZenoParamPushButton* pBtn = qobject_cast<ZenoParamPushButton*>(pItem))
             {
                 //nothing need to be done.
-                if (value.canConvert<QColor>()) {
-                    pBtn->setProperty("color", value.value<QColor>().name());
+                // colorvec3f
+                if (value.canConvert<UI_VECTYPE>()) {
+                    UI_VECTYPE vec = value.value<UI_VECTYPE>();
+                    if (vec.size() == 3) {
+                        auto color = QColor::fromRgbF(vec[0], vec[1], vec[2]);
+                        pBtn->setProperty("color", color.name());
+                    }
                 }
             }
             else if (ZenoVecEditItem* pBtn = qobject_cast<ZenoVecEditItem*>(pItem))
@@ -101,9 +106,11 @@ void ZenoGvHelper::setValue(QGraphicsItem* item, PARAM_CONTROL ctrl, const QVari
             }
             else if (ZVecEditorItem* pEditor = qobject_cast<ZVecEditorItem*>(pItem))
             {
-                UI_VECTYPE vec = value.value<UI_VECTYPE>();
+                if (value.canConvert<CURVES_DATA>()) {
+                    return;
+                }
                 bool bFloat = (CONTROL_VEC4_FLOAT == ctrl || CONTROL_VEC3_FLOAT == ctrl || CONTROL_VEC2_FLOAT == ctrl);
-                pEditor->setVec(vec, bFloat, pScene);
+                pEditor->setVec(value, bFloat, pScene);
             }
             else if (ZenoParamComboBox* pBtn = qobject_cast<ZenoParamComboBox*>(pItem))
             {
@@ -130,10 +137,16 @@ void ZenoGvHelper::setValue(QGraphicsItem* item, PARAM_CONTROL ctrl, const QVari
         case QGraphicsTextItem::Type:
         {
             QGraphicsTextItem* pItem = qgraphicsitem_cast<QGraphicsTextItem*>(item);
-            if (ctrl == CONTROL_FLOAT)
-                pItem->setPlainText(QString::number(value.toFloat()));
+            if (ctrl == CONTROL_FLOAT) 
+            {
+                if (value.canConvert<CURVES_DATA>()) {
+                    return;
+                } else {
+                    pItem->setPlainText(UiHelper::variantToString(value));
+                }
+            }
             else
-                pItem->setPlainText(value.toString());
+                pItem->setPlainText(UiHelper::variantToString(value));
             break;
         }
         case QGraphicsWidget::Type:
@@ -194,6 +207,11 @@ void ZenoGvHelper::setCtrlProperties(QGraphicsItem *item,  const QVariant &value
                     ZenoParamDoubleSpinBox *pSpinBox = qobject_cast<ZenoParamDoubleSpinBox *>(pItem);
                     pSpinBox->setSliderInfo(info);
                 }
+            }
+            ZenoParamPathEdit* pEditItem = qgraphicsitem_cast<ZenoParamPathEdit*>(item);
+            if (pEditItem && map.contains("filter"))
+            {
+                pEditItem->setProperty("filter", map["filter"]);
             }
     }
 }

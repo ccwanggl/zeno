@@ -7,6 +7,7 @@
 #include <zeno/utils/logger.h>
 #include <zeno/utils/vec.h>
 #include <map>
+#include <set>
 #include "./BoundingBox.h"
 
 namespace zeno {
@@ -128,6 +129,72 @@ public:
         bool is_active_; // helper for C++11 range-based for-loops
     };
 
+    class FaceAroundVertexCirculator {
+    public:
+        FaceAroundVertexCirculator(const SurfaceMesh* mesh = nullptr,
+                                       int v = PMP_MAX_INDEX)
+            : mesh_(mesh), is_active_(true) {
+            if (mesh_) {
+                halfedge_ = mesh_->vconn_[v].halfedge_;
+                if (halfedge_ != PMP_MAX_INDEX && mesh_->hconn_[halfedge_].face_ == PMP_MAX_INDEX)
+                    operator++();
+            }
+        }
+
+        bool operator==(const FaceAroundVertexCirculator& rhs) const {
+            assert(mesh_ == rhs.mesh_);
+            return (is_active_ && (halfedge_ == rhs.halfedge_));
+        }
+
+        bool operator!=(const FaceAroundVertexCirculator& rhs) const {
+            return !operator==(rhs);
+        }
+
+        // pre-increment (rotate couter-clockwise)
+        FaceAroundVertexCirculator& operator++() {
+            assert(mesh_ && (halfedge_ != PMP_MAX_INDEX));
+            do {
+                halfedge_ = mesh_->hconn_[halfedge_].prev_halfedge_ ^ 1;
+            } while (mesh_->hconn_[halfedge_].face_ == PMP_MAX_INDEX);
+            is_active_ = true;
+            return *this;
+        }
+
+        // pre-decrement (rotate clockwise)
+        FaceAroundVertexCirculator& operator--() {
+            assert(mesh_ && (halfedge_ != PMP_MAX_INDEX));
+            do {
+                halfedge_ = mesh_->hconn_[halfedge_^1].next_halfedge_;
+            } while (mesh_->hconn_[halfedge_].face_ == PMP_MAX_INDEX);
+            return *this;
+        }
+
+        // get the halfedge the circulator refers to
+        int operator*() const {
+            assert(mesh_ && (halfedge_ != PMP_MAX_INDEX));
+            return mesh_->hconn_[halfedge_].face_;
+        }
+
+        // cast to bool: true if vertex is not isolated
+        operator bool() const { return halfedge_ != PMP_MAX_INDEX; }
+
+        // helper for C++11 range-based for-loops
+        FaceAroundVertexCirculator& begin() {
+            is_active_ = (halfedge_ == PMP_MAX_INDEX);
+            return *this;
+        }
+        // helper for C++11 range-based for-loops
+        FaceAroundVertexCirculator& end() {
+            is_active_ = true;
+            return *this;
+        }
+
+    private:
+        const SurfaceMesh* mesh_;
+        int halfedge_;
+        bool is_active_; // helper for C++11 range-based for-loops
+    };
+
     SurfaceMesh(std::shared_ptr<zeno::PrimitiveObject> prim,
                 std::string line_pick_tag);
     SurfaceMesh(const SurfaceMesh& rhs);
@@ -143,7 +210,7 @@ public:
         return (!(h != PMP_MAX_INDEX && hconn_[h].face_ != PMP_MAX_INDEX));
     }
     bool is_boundary_e(int e) const {
-        return (hconn_[e << 1].face_ == PMP_MAX_INDEX || hconn_[e<<1|1].face_ == PMP_MAX_INDEX);
+        return (hconn_[e << 1].face_ == PMP_MAX_INDEX || hconn_[e << 1 | 1].face_ == PMP_MAX_INDEX);
     }
     bool is_isolated(int v) const { return halfedge(v) == PMP_MAX_INDEX; }
     inline int to_vertex(int h) const { return hconn_[h].vertex_; }
@@ -162,6 +229,22 @@ public:
             hconn_[nh].prev_halfedge_ = h;
         }
     }
+    inline void build_dup_list() {
+        auto &vduplicate = prim_->verts.attr<int>("v_duplicate");
+        dup_list_.clear();
+        for (int v = 0; v < vertices_size_; ++v) {
+            int src = vduplicate[v];
+            if (dup_list_.count(src) == 0)
+                dup_list_[src] = std::set<int>{};
+            dup_list_[src].insert(v);
+        }
+    }
+    inline std::set<int>& get_dup_list(int v) {
+        return dup_list_[v];
+    }
+    inline void erase_dup_list(int v) {
+        dup_list_.erase(v);
+    }
 
     VertexAroundVertexCirculator vertices(int v) const {
         return VertexAroundVertexCirculator(this, v);
@@ -171,12 +254,16 @@ public:
         return HalfedgeAroundVertexCirculator(this, v);
     }
 
+    FaceAroundVertexCirculator faces(int v) const {
+        return FaceAroundVertexCirculator(this, v);
+    }
+
     int find_halfedge(int start, int end) const;
-    bool is_collapse_ok(int v0v1);
+    void is_collapse_ok(int v0v1, bool &hcol01, bool &hcol10, bool relaxed = false);
     void collapse(int h);
     void garbage_collection();
     int split(int e, int v, int& new_lines, int& new_faces);
-    bool is_flip_ok(int e) const;
+    bool is_flip_ok(int e, bool relaxed = false) const;
     void flip(int e);
 
     size_t valence(int v) const;
@@ -406,6 +493,7 @@ public:
     size_t lines_size_;
     size_t faces_size_;
 
+    std::map<int, std::set<int>> dup_list_{};
     std::map<std::pair<int, int>, int> line_map_{};
     std::string line_pick_tag_;
 
@@ -421,6 +509,9 @@ public:
 
     // indicate garbage present
     bool has_garbage_;
+
+    // a constant for collapse and flip checks
+    const float angle_thrd = (M_PI * 30.0f / 180.0f);
 
     // helper data for add_tri()
     typedef std::pair<int, int> NextCacheEntry;

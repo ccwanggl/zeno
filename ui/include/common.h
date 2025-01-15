@@ -2,6 +2,15 @@
 #define __ZENO_COMMON_H__
 
 #include <QModelIndex>
+#include <QSize>
+#include <QDockWidget>
+#include <rapidjson/stringbuffer.h>
+#include <rapidjson/prettywriter.h>
+#include <memory>
+
+typedef rapidjson::PrettyWriter<rapidjson::StringBuffer> RAPIDJSON_WRITER;
+
+struct LayerOutNode;
 
 struct TIMELINE_INFO
 {
@@ -9,13 +18,60 @@ struct TIMELINE_INFO
     int endFrame;
     int currFrame;
     bool bAlways;
+    int timelinefps;
 
-    TIMELINE_INFO() : beginFrame(0), endFrame(0), currFrame(0), bAlways(false) {}
+    TIMELINE_INFO() : beginFrame(0), endFrame(0), currFrame(0), bAlways(false), timelinefps(24) {}
+};
+
+enum REC_RETURN_CODE
+{
+    REC_NOERROR = 0,
+    REC_NO_RECORD_OPTION = 1,
+    REC_OPTIX_INTERNAL_FATAL = -1,
+    REC_FFMPEG_FATAL = -3,
+    REC_NOFFMPEG = -2,
+};
+
+struct RECORD_SETTING
+{
+    QString record_path;
+    QString videoname;
+    int fps;
+    int bitrate;
+    int numMSAA;
+    int numOptix;
+    int width;
+    int height;
+    bool bExportVideo;
+    bool needDenoise;
+    bool bAutoRemoveCache;
+    bool bAov;
+    bool bMask;
+    bool bExr;
+
+    QString exePath;
+
+    RECORD_SETTING() : fps(24), bitrate(200000), numMSAA(0), numOptix(1), width(1280), height(720), bExportVideo(false), needDenoise(false), bAutoRemoveCache(true), bAov(false), bExr(false), bMask(false){}
+};
+
+struct LAYOUT_SETTING {
+    std::shared_ptr<LayerOutNode> layerOutNode;
+    QSize size;
+    void(*cbDumpTabsToZsg)(QDockWidget*, RAPIDJSON_WRITER&);
+};
+
+struct USERDATA_SETTING
+{
+    bool optix_show_background;
+    USERDATA_SETTING() : optix_show_background(false) {}
 };
 
 struct APP_SETTINGS
 {
     TIMELINE_INFO timeline;
+    RECORD_SETTING recordInfo;
+    LAYOUT_SETTING layoutInfo;
+    USERDATA_SETTING userdataInfo;
     //todo: other settings.
 };
 
@@ -50,6 +106,29 @@ struct LiveObjectData{
     std::string camSrc = "";
     int verLoadCount = 0;
     int camLoadCount = 0;
+};
+
+struct ZENO_RECORD_RUN_INITPARAM {
+    QString sZsgPath = "";
+    bool bRecord = false;
+    bool bOptix = false;    //is optix view.
+    bool isExportVideo = false;
+    bool needDenoise = false;
+    bool export_exr = false;
+    bool bAov = false;
+    int iFrame = 0;
+    int iSFrame = 0;
+    int iSample = 0;
+    int iBitrate = 20000;
+    int iFps = 24;
+    QString sPixel = "";
+    QString sPath = "";
+    QString audioPath = "";
+    QString configFilePath = "";
+    QString videoName = "output.mp4";
+    QString subZsg = "";
+    QString paramsJson = "";
+    bool exitWhenRecordFinish = false;
 };
 
 #endif

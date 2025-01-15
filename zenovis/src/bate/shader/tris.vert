@@ -6,6 +6,8 @@ uniform mat4 mView;
 uniform mat4 mProj;
 uniform mat4 mInvView;
 uniform mat4 mInvProj;
+uniform bool mUvMode;
+uniform vec3 mCameraCenter;
 
 in vec3 vPosition;
 in vec3 vColor;
@@ -18,14 +20,21 @@ out vec3 iColor;
 out vec3 iNormal;
 out vec3 iTexCoord;
 out vec3 iTangent;
+out vec3 posRWS;
 
 void main()
 {
   position = vPosition;
+  posRWS = vPosition - mCameraCenter;
   iColor = vColor;
   iNormal = vNormal;
   iTexCoord = vTexCoord;
   iTangent = vTangent;
-  gl_Position = mVP * vec4(position, 1.0);
+  if (mUvMode) {
+    gl_Position = mVP * vec4(vTexCoord, 1.0);
+  }
+  else {
+    gl_Position = mVP * vec4(position, 1.0);
+  }
 }
 )"

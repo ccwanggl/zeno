@@ -11,6 +11,7 @@
 #include <zeno/extra/GlobalStatus.h>
 #include <zeno/extra/GraphException.h>
 #include <zeno/extra/EventCallbacks.h>
+#include <zeno/extra/assetDir.h>
 #include <zeno/funcs/ObjectCodec.h>
 #include <zeno/zeno.h>
 #include <string>
@@ -23,6 +24,11 @@
 #include "corelaunch.h"
 #include "viewdecode.h"
 #include "settings/zsettings.h"
+#include <zeno/funcs/ParseObjectFromUi.h>
+#include "startup/zstartup.h"
+#include <zeno/types/ListObject.h>
+#include <zeno/types/DictObject.h>
+#include <zenomodel/include/jsonhelper.h>
 
 namespace {
 
@@ -79,7 +85,7 @@ static void send_packet(std::string_view info, const char *buf, size_t len) {
 #endif
 }
 
-static int runner_start(std::string const &progJson, int sessionid, bool bZenCache, int cachenum, std::string cachedir, bool cacheautorm, bool cacheLightCameraOnly, bool cacheMaterialOnly) {
+static int runner_start(std::string const &progJson, int sessionid, const LAUNCH_PARAM& param) {
     zeno::log_trace("runner got program JSON: {}", progJson);
     //MessageBox(0, "runner", "runner", MB_OK);           //convient to attach process by debugger, at windows.
     zeno::scope_exit sp([=]() { std::cout.flush(); });
@@ -92,8 +98,18 @@ static int runner_start(std::string const &progJson, int sessionid, bool bZenCac
     session->globalStatus->clearState();
     auto graph = session->createGraph();
 
-    if (bZenCache) {
-        zeno::getSession().globalComm->frameCache(cachedir, cachenum);
+    //$ZSG value
+    zeno::setConfigVariable("ZSG", param.zsgPath.toStdString());
+    //$FPS, getFrameTime value
+    zeno::setConfigVariable("FPS", QString::number(param.projectFps).toStdString());
+
+    zeno::getSession().globalComm->objTmpCachePath = param.objCacheDir.toStdString();
+
+    float fps = param.projectFps;
+    zeno::getSession().globalState->frame_time = (fps > 0) ? (1.f / fps) : 24;
+
+    if (param.enableCache) {
+        zeno::getSession().globalComm->frameCache(param.cacheDir.toStdString(), param.cacheNum);
     }
     else {
         zeno::getSession().globalComm->frameCache("", 0);
@@ -119,6 +135,84 @@ static int runner_start(std::string const &progJson, int sessionid, bool bZenCac
                 + ":" + std::to_string(graph->endFrameNumber)
                 + "\"}", "", 0);
 
+    zeno::getSession().globalState->zeno_version = getZenoVersion();
+    if (!param.generator.isEmpty())
+    {
+        //only execute the node which id is `param.generator`.
+        std::set<std::string> nodes;
+        std::string ident = param.generator.toStdString();
+        nodes.insert(ident);
+        graph->applyNodes(nodes);
+
+        //yield result from the GenerateCommands node.
+        const auto& node = graph->getNode(ident);
+        rapidjson::StringBuffer s;
+        RAPIDJSON_WRITER writer(s);
+        {
+            JsonObjBatch objBatch(writer);
+            for (auto const& [ds, bound] : node->inputBounds) {
+                const auto& sourceInput = graph->getNodeInput(ident, ds);
+                if (ident.find("PythonNode") > 0 && ds == "args")
+                {
+                    auto dict = std::dynamic_pointer_cast<zeno::DictObject>(sourceInput);
+                    writer.Key("args");
+                    {
+                        JsonObjBatch argBatch(writer);
+                        int idx = 0;
+                        for (const auto& [key, obj] : dict->lut)
+                        {
+                            std::shared_ptr<zeno::NumericObject> num = std::dynamic_pointer_cast<zeno::NumericObject>(obj);
+                            if (num) {
+                                writer.Key(key.c_str());
+                                if (std::get_if<float>(&num->value))
+                                {
+                                    writer.Double(num->get<float>());
+                                }
+                                else if (std::get_if<int>(&num->value))
+                                {
+                                    writer.Int(num->get<int>());
+                                }
+                                else
+                                {
+                                    writer.Null();
+                                    zeno::log_error("parse obj error");
+                                }
+                                idx++;
+                            }
+                            else
+                            {
+                                std::shared_ptr<zeno::StringObject> pStr = std::dynamic_pointer_cast<zeno::StringObject>(obj);
+                                if (pStr) {
+                                    writer.Key(key.c_str());
+                                    writer.String(pStr->get().c_str());
+                                    idx++;
+                                }
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    const auto& strObj = std::dynamic_pointer_cast<zeno::StringObject>(sourceInput);
+                    if (strObj && !strObj->get().empty())
+                    {
+                        writer.Key(ds.c_str());
+                        std::string commands = strObj->get();
+                        writer.String(commands.c_str());
+                    }
+                }
+            }
+        }
+        std::string strJson = s.GetString();
+        if (strJson != "")
+        {
+            send_packet("{\"action\":\"generate\",\"key\":\"" + ident + "\"" + "}", strJson.c_str(), strJson.length() + 1);
+            return 0;
+        }
+        //and then send packet back to ui process.
+        return onfail();
+    }
+
     for (int frame = graph->beginFrameNumber; frame <= graph->endFrameNumber; frame++)
     {
         zeno::scope_exit sp([=]() { std::cout.flush(); });
@@ -141,10 +235,15 @@ static int runner_start(std::string const &progJson, int sessionid, bool bZenCac
 
         zeno::log_debug("end frame {}", frame);
 
-        send_packet("{\"action\":\"newFrame\"}", "", 0);
+        send_packet("{\"action\":\"newFrame\",\"key\":\"" + std::to_string(frame) +"\"}", "", 0);
 
-        if (bZenCache) {
-            session->globalComm->dumpFrameCache(frame, cacheLightCameraOnly, cacheMaterialOnly);
+        if (param.enableCache) {
+            //construct cache lock.
+            std::string sLockFile = param.cacheDir.toStdString() + "/" + zeno::iotags::sZencache_lockfile_prefix + std::to_string(frame) + ".lock";
+            QLockFile lckFile(QString::fromStdString(sLockFile));
+            bool ret = lckFile.tryLock();
+            //dump cache to disk.
+            session->globalComm->dumpFrameCache(frame, param.applyLightAndCameraOnly, param.applyMaterialOnly);
         } else {
             auto const& viewObjs = session->globalComm->getViewObjects();
             zeno::log_debug("runner got {} view objects", viewObjs.size());
@@ -156,7 +255,7 @@ static int runner_start(std::string const &progJson, int sessionid, bool bZenCac
             }
         }
 
-        send_packet("{\"action\":\"finishFrame\"}", "", 0);
+        send_packet("{\"action\":\"finishFrame\",\"key\":\"" + std::to_string(frame) + "\"}", "", 0);
 
         if (session->globalStatus->failed())
             return onfail();
@@ -172,14 +271,10 @@ int runner_main(const QCoreApplication& app) {
 #ifdef __linux__
     stderr = freopen("/dev/stdout", "w", stderr);
 #endif
+    LAUNCH_PARAM param;
     int sessionid = 0;
     int port = -1;
-    bool enablecache = true;
-    int cachenum = 1;
-    std::string cachedir = "";
-    bool cacheLightCameraOnly = false;
-    bool cacheMaterialOnly = false;
-    bool cacheautorm = false;
+    std::string objcachedir = "";
     QCommandLineParser cmdParser;
     cmdParser.addHelpOption();
     cmdParser.addOptions({
@@ -192,6 +287,10 @@ int runner_main(const QCoreApplication& app) {
         {"cacheLightCameraOnly", "cacheLightCameraOnly", "only cache light and camera object"},
         {"cacheMaterialOnly", "cacheMaterialOnly", "only cache material object"},
         {"cacheautorm", "cacheautoremove", "remove cache after render"},
+        {"zsg", "zsg", "zsg"},
+        {"projectFps", "current project fps", "fps"},
+        {"objcachedir", "objcachedir", "obj temp cache dir"},
+        {"generator", "generator", "the node ident which trigger generate command"},
         });
     cmdParser.process(app);
     if (cmdParser.isSet("sessionid"))
@@ -199,17 +298,25 @@ int runner_main(const QCoreApplication& app) {
     if (cmdParser.isSet("port"))
         port = cmdParser.value("port").toInt();
     if (cmdParser.isSet("enablecache"))
-        enablecache = cmdParser.value("enablecache").toInt();
+        param.enableCache = cmdParser.value("enablecache").toInt();
     if (cmdParser.isSet("cachenum"))
-        cachenum = cmdParser.value("cachenum").toInt();
+        param.cacheNum = cmdParser.value("cachenum").toInt();
     if (cmdParser.isSet("cachedir"))
-        cachedir = cmdParser.value("cachedir").toStdString();
+        param.cacheDir = cmdParser.value("cachedir");
+    if (cmdParser.isSet("objcachedir"))
+        param.objCacheDir = cmdParser.value("objcachedir");
     if (cmdParser.isSet("cacheLightCameraOnly"))
-        cacheLightCameraOnly = cmdParser.value("cacheLightCameraOnly").toInt();
+        param.applyLightAndCameraOnly = cmdParser.value("cacheLightCameraOnly").toInt();
     if (cmdParser.isSet("cacheMaterialOnly"))
-        cacheMaterialOnly = cmdParser.value("cacheMaterialOnly").toInt();
+        param.applyMaterialOnly = cmdParser.value("cacheMaterialOnly").toInt();
     if (cmdParser.isSet("cacheautorm"))
-        cacheautorm = cmdParser.value("cacheautorm").toInt();
+        param.autoRmCurcache = cmdParser.value("cacheautorm").toInt();
+    if (cmdParser.isSet("zsg"))
+        param.zsgPath = cmdParser.value("zsg");
+    if (cmdParser.isSet("projectFps"))
+        param.projectFps = cmdParser.value("projectFps").toInt();
+    if (cmdParser.isSet("generator"))
+        param.generator = cmdParser.value("generator");
 
     std::cerr.rdbuf(std::cout.rdbuf());
     std::clog.rdbuf(std::cout.rdbuf());
@@ -246,6 +353,6 @@ int runner_main(const QCoreApplication& app) {
     }(), 0);
 #endif
 
-    return runner_start(progJson, sessionid, enablecache, cachenum, cachedir, cacheautorm, cacheLightCameraOnly, cacheMaterialOnly);
+    return runner_start(progJson, sessionid, param);
 }
 #endif

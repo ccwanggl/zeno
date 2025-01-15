@@ -20,6 +20,9 @@ target_sources(zeno PRIVATE
   volume/Conversion.cu
 )
 ]]
+target_sources(zeno PRIVATE
+  volume/VolumeOps.cu
+)
 
 # shallow water & terrain
 target_sources(zeno PRIVATE
@@ -31,6 +34,7 @@ target_sources(zeno PRIVATE
 # level set function
 target_sources(zeno PRIVATE
   levelset/Grid_creator.cu
+  levelset/Grid_creator_adaptive.cu
   levelset/Reinitialization.cu
   levelset/Extrapolation.cu
 )

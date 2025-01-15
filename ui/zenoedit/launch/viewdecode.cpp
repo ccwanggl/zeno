@@ -19,6 +19,9 @@
 #include <cassert>
 #include <vector>
 #include <string>
+#include "launch/corelaunch.h"
+#include "settings/zsettings.h"
+#include "launch/ztcpserver.h"
 
 namespace {
 
@@ -87,20 +90,79 @@ struct PacketProc {
         } else if (action == "newFrame") {
             globalCommNeedNewFrame = 1;
             clearGlobalIfNeeded();
-            zenoApp->getMainWindow()->updateViewport(QString::fromStdString(action));
+
+            const QString& act = QString::fromStdString(action);
+            const QString& keyObj = QString::fromStdString(objKey);
+            auto mainWin = zenoApp->getMainWindow();
+            if (mainWin)
+                mainWin->updateViewport(act);
+            auto tcpServer = zenoApp->getServer();
+            if (tcpServer)
+                tcpServer->onFrameStarted(act, keyObj);
 
         } else if (action == "finishFrame") {
             zeno::getSession().globalComm->finishFrame();
             //need to notify the GL to update.
-            zenoApp->getMainWindow()->updateViewport(QString::fromStdString(action));
+            auto mainWin = zenoApp->getMainWindow();
+            const QString& act = QString::fromStdString(action);
+            const QString& keyObj = QString::fromStdString(objKey);
+            if (mainWin)
+                mainWin->updateViewport(act);
+            auto tcpServer = zenoApp->getServer();
+            if (tcpServer)
+                tcpServer->onFrameFinished(act, keyObj);
 
-        //} else if (action == "frameCache") {
-            //auto pos = objKey.find('!');
-            //if (pos != std::string::npos) {
-                //int maxCachedFrames = std::stoi(objKey.substr(0, pos));
-                //std::string path = objKey.substr(pos + 1);
-                //zeno::getSession().globalComm->frameCache(path, maxCachedFrames);
-            //}
+        } else if (action == "frameCache") {
+            auto mainWin = zenoApp->getMainWindow();
+            if (mainWin && mainWin->isOnlyOptixWindow())
+            {
+                auto pos = objKey.find('|');
+                if (pos != std::string::npos) {
+                    std::string path = objKey.substr(0, pos);
+                    int cacheNum = std::stoi(objKey.substr(pos + 1));
+                    if (!path.empty() && cacheNum > 0)
+                    {
+                        zeno::getSession().globalComm->frameCache(path, cacheNum);
+                        return true;
+                    }
+                }
+                //todo: error and exit because there is no cache obj.
+                return false;
+            }
+        } else if (action == "generate") {
+            QString ident = QString::fromStdString(objKey);
+            rapidjson::Document doc;
+            doc.Parse(buf, len);
+
+            if (!doc.IsObject()) {
+                zeno::log_warn("document root not object: {}", std::string(buf, len));
+                return false;
+            }
+            auto root = doc.GetObject();
+            IGraphsModel* pModel = zenoApp->graphsManagment()->currentModel();
+            QModelIndex nodeIdx = pModel->nodeIndex(ident);
+            QModelIndex subgIdx = nodeIdx.data(ROLE_SUBGRAPH_IDX).toModelIndex();
+            for (auto iter = root.MemberBegin(); iter != root.MemberEnd(); iter++)
+            {
+                QString val;
+                if (ident.contains("PythonNode") && iter->name == "args")
+                {
+                    if (iter->value.IsObject())
+                    {
+                        rapidjson::StringBuffer sbBuf;
+                        rapidjson::Writer<rapidjson::StringBuffer> jWriter(sbBuf);
+                        iter->value.Accept(jWriter);
+                        val = QString::fromUtf8(sbBuf.GetString());
+                    }
+                }
+                else if (iter->value.IsString())
+                {
+                    val = iter->value.GetString();
+                }
+
+                QString socket = iter->name.GetString();
+                pModel->updateSocketDefl(ident, { socket, "", val }, subgIdx, false);
+            }
 
         } else if (action == "frameRange") {
             auto pos = objKey.find(':');
@@ -109,6 +171,11 @@ struct PacketProc {
                 int end = std::stoi(objKey.substr(pos + 1));
                 zeno::getSession().globalComm->initFrameRange(beg, end);
                 zeno::getSession().globalState->frameid = beg;
+
+                ZTcpServer* pServer = zenoApp->getServer();
+                if (pServer) {
+                    pServer->onInitFrameRange(QString::fromStdString(action), beg, end);
+                }
             }
 
         } else if (action == "reportStatus") {

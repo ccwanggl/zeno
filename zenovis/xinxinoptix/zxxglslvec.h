@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cuda_fp16.h>
 #include <cuda/helpers.h>
 
 __forceinline__ __device__ float to_radians(float degrees) {
@@ -7,6 +8,13 @@ __forceinline__ __device__ float to_radians(float degrees) {
 }
 __forceinline__ __device__ float to_degrees(float radians) {
     return radians * M_1_PIf * 180.0f;
+}
+
+template<typename T>
+__forceinline__ __device__ void swap(T& a, T& b) {
+    T t = a;
+    a = b;
+    b = t;
 }
 
 struct vec4{
@@ -36,7 +44,13 @@ struct vec4{
 struct vec3{
     float x, y, z;
 
-    __forceinline__ __device__ float operator[](unsigned int index) const {
+    __forceinline__ __device__ float& operator[](unsigned int index) {
+        auto ptr= &this->x;
+        ptr += index;
+        return *ptr;
+    }
+
+    __forceinline__ __device__ const float& operator[](unsigned int index) const {
         auto ptr= &this->x;
         ptr += index;
         return *ptr;
@@ -78,6 +92,13 @@ struct vec3{
 
 struct vec2{
     float x, y;
+
+    __forceinline__ __device__ float& operator[](unsigned int index) {
+        auto ptr= &this->x;
+        ptr += index;
+        return *ptr;
+    }
+    
     __forceinline__ __device__ vec2(const float2 &_v)
     {
         x = _v.x;
@@ -216,6 +237,15 @@ __forceinline__ __device__ vec3 operator*(float b, vec3 a)
 __forceinline__ __device__ vec4 operator*(float b, vec4 a)
 {
     return vec4(a.x*b, a.y*b, a.z*b, a.w*b);
+}
+
+__forceinline__ __device__ vec3 operator*(float3 b, vec3 a)
+{
+    return vec3(a.x*b.x, a.y*b.y, a.z*b.z);
+}
+__forceinline__ __device__ vec4 operator*(float4 b, vec4 a)
+{
+    return vec4(a.x*b.x, a.y*b.y, a.z*b.z, a.w*b.w);
 }
 
 __forceinline__ __device__ vec2 operator/(vec2 a, float b)
@@ -510,21 +540,21 @@ __forceinline__ __device__ vec4 inversesqrt(vec4 a)
 
 
 //////////////begin of common math/////////////////////////////////////////////////
-__forceinline__ __device__ float abs(float a)
-{
-    return float(fabsf(a));
-}
+// __forceinline__ __device__ float abs(float a)
+// {
+//     return float(fabsf(a));
+// }
 __forceinline__ __device__ vec2 abs(vec2 a)
 {
-    return vec2(abs(a.x), abs(a.y));
+    return vec2(fabsf(a.x), fabsf(a.y));
 }
 __forceinline__ __device__ vec3 abs(vec3 a)
 {
-    return vec3(abs(a.x), abs(a.y), abs(a.z));
+    return vec3(fabsf(a.x), fabsf(a.y), fabsf(a.z));
 }
 __forceinline__ __device__ vec4 abs(vec4 a)
 {
-    return vec4(abs(a.x), abs(a.y), abs(a.z), abs(a.w));
+    return vec4(fabsf(a.x), fabsf(a.y), fabsf(a.z), fabsf(a.w));
 }
 
 __forceinline__ __device__ float m_sign(float a)
@@ -705,6 +735,26 @@ __forceinline__ __device__ vec4 clamp(vec4 a, vec4 b, vec4 c)
     return min(max(a, b), c);
 }
 
+__forceinline__ __device__ float saturate(float a)
+{
+    return clamp(a, 0.0f, 1.0f);
+}
+
+__forceinline__ __device__ vec2 saturate(vec2 a)
+{
+    return clamp(a, 0.0f, 1.0f);
+}
+
+__forceinline__ __device__ vec3 saturate(vec3 a)
+{
+    return clamp(a, 0.0f, 1.0f);
+}
+
+__forceinline__ __device__ vec4 saturate(vec4 a)
+{
+    return clamp(a, 0.0f, 1.0f);
+}
+
 __forceinline__ __device__ float mix(float a, float b, float c)
 {
     return (1-c)*a + c * b;
@@ -835,15 +885,8 @@ __forceinline__ __device__ vec4 step(vec4 limit, vec4 a)
 
 __forceinline__ __device__ float smoothstep(float a, float b, float c)
 {
-    if(c>b)
-    {
-        return 1;
-    }
-    if(c>a)
-    {
-        return (c-a)/(b-a);
-    }
-    return 0;
+    auto t = clamp((c - a) / (b - a), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
 }
 __forceinline__ __device__ vec2 smoothstep(vec2 a, vec2 b, vec2 c)
 {
@@ -924,6 +967,25 @@ __forceinline__ __device__ float length(vec4 a)
 {
     return sqrtf(dot(a,a));
 }
+
+template <typename T>
+__forceinline__ __device__ float lengthSquared(T a)
+{
+    return dot(a,a);
+}
+
+__forceinline__ __device__ float average(vec2 a)
+{
+    return (a.x + a.y) / 2.0f;
+}
+__forceinline__ __device__ float average(vec3 a)
+{
+    return (a.x + a.y + a.z) / 3.0f;
+}
+__forceinline__ __device__ float average(vec4 a)
+{
+    return (a.x + a.y + a.z + a.w) / 4.0f;
+}
 __forceinline__ __device__ vec2 normalize(vec2 a)
 {
     return a/(length(a)+1e-6f);
@@ -962,11 +1024,6 @@ __forceinline__ __device__ vec4 texture2D(cudaTextureObject_t texObj, vec2 uv)
     return vec4(res.x, res.y, res.z, res.w);
 }
 
-// __forceinline__ __device__ float textureSparse3D(nanovdb *aaa, vec3 pos)
-// {
-
-// }
-
 /////////////end of geometry math/////////////////////////////////////////////////
 
 ////////////matrix operator...////////////////////////////////////////////////////
@@ -987,6 +1044,9 @@ struct mat4{
 
 struct mat3{
     vec3 m0, m1, m2;
+
+    __forceinline__ __device__ mat3(const vec3& v0, const vec3& v1, const vec3 v2): m0(v0), m1(v1), m2(v2) {}
+
     __forceinline__ __device__ mat3(float m00, float m01, float m02, float m10, float m11, float m12, float m20, float m21, float m22)
     {
         m0 = vec3(m00, m01, m02);
@@ -999,6 +1059,13 @@ struct mat3{
         m0 = vec3(_v.m0);
         m1 = vec3(_v.m1);
         m2 = vec3(_v.m2);
+    }
+
+    __forceinline__ __device__ void transpose() {
+
+        swap(m0.y, m1.x);
+        swap(m0.z, m2.x);
+        swap(m1.z, m2.y);     
     }
 };
 
@@ -1045,7 +1112,7 @@ __forceinline__ __device__ vec4 operator*(mat4 a, vec4 b)
 //}
 
 __forceinline__ __device__ vec3 normalmap(vec3 norm, float scale) {
-    norm = norm * 2 - 1;
+    //norm = norm * 2 - 1;
     float x = norm.x * scale;
     float y = norm.y * scale;
     float z = 1 - sqrt(x * x + y * y);
@@ -1149,7 +1216,7 @@ __forceinline__ __device__ float luminance(vec3 c) {
 }
 
 __forceinline__ __device__ float safepower(float in1, float in2) {
-    return sign(in1) * pow(abs(in1), in2);
+    return sign(in1) * powf(abs(in1), in2);
 }
 
 __forceinline__ __device__ vec2 safepower(vec2 in1, vec2 in2) {
@@ -1186,7 +1253,7 @@ __forceinline__ __device__ float sinTheta2(vec3 w) {
 }
 
 __forceinline__ __device__ float sinTheta(vec3 w) {
-    return sqrt(sinTheta2(w));
+    return sqrtf(sinTheta2(w));
 }
 
 __forceinline__ __device__ float tanTheta(vec3 w) {
@@ -1230,7 +1297,7 @@ __forceinline__ __device__ vec3 refract(vec3 I, vec3 N, float eta)
     return vec3(0,0,0);
   }
   else
-    return -eta * I + (eta * dot(N, I) - sqrt(k)) * N;
+    return -eta * I + (eta * dot(N, I) - sqrtf(k)) * N;
 }
 
 __forceinline__ __device__ unsigned int laine_karras_permutation(unsigned int x, unsigned int seed) {
@@ -1283,4 +1350,41 @@ __forceinline__ __device__ vec2 shuffled_scrambled_sobol_2d(unsigned int index, 
     p.x = nested_uniform_scramble(p.x, hash_combine(seed, 0u));
     p.y = nested_uniform_scramble(p.y, hash_combine(seed, 1u));
     return vec2(p.x, p.y)*exp2(-32.);
+}
+
+__forceinline__ __device__ float3 decodeColor(uchar3 c)
+{
+  vec3 cout = vec3((float)(c.x), (float)(c.y), (float)(c.z)) / 255.0f;
+  return make_float3(cout.x, cout.y, cout.z);
+}
+__forceinline__ __device__ float3 decodeNormal(uchar3 c)
+{
+  vec3 cout = vec3((float)(c.x), (float)(c.y), (float)(c.z)) / 255.0 * 2.0f - 1.0f;
+  return make_float3(cout.x, cout.y, cout.z);
+}
+
+__forceinline__ __device__ float2 decodeHalf(ushort2 c)
+{
+  half& hx = reinterpret_cast<half&>(c.x);
+  half& hy = reinterpret_cast<half&>(c.y);
+
+  return { __half2float(hx), __half2float(hy) };
+}
+
+__forceinline__ __device__ float3 decodeHalf(ushort3 c)
+{
+  half& hx = reinterpret_cast<half&>(c.x);
+  half& hy = reinterpret_cast<half&>(c.y);
+  half& hz = reinterpret_cast<half&>(c.z);
+
+  return { __half2float(hx), __half2float(hy), __half2float(hz) };
+}
+
+__forceinline__ __device__ float3 decodeColor(float4 c)
+{
+  return make_float3(c.x, c.y, c.z);
+}
+__forceinline__ __device__ float3 decodeNormal(float4 c)
+{
+  return make_float3(c.x, c.y, c.z);
 }

@@ -8,7 +8,7 @@
 #include <zeno/types/PrimitiveObject.h>
 #include <zeno/utils/variantswitch.h>
 
-#include "zensim/resource/Filesystem.hpp"
+#include "zensim/io/Filesystem.hpp"
 #include "zensim/zpc_tpls/fmt/color.h"
 #include "zensim/zpc_tpls/fmt/format.h"
 #include <filesystem>
@@ -58,7 +58,7 @@ struct AssetConversion : INode {
         else if (format != ".obj" && format != ".gltf" && format != ".fbx")
             throw std::runtime_error(fmt::format("unknown output file format [{}]\n", outputPath));
         if (outputPath.empty())
-            outputPath = inputPath.parent_path().string() + "/" + inputPath.stem().string() + "." + format;
+            outputPath = inputPath.parent_path().string() + "/" + inputPath.stem().string() + format;
 
         for (const auto &path : pathLocations) {
             fmt::print("iterate path: {}\n", path);
@@ -252,7 +252,7 @@ struct PointsToZSParticles : INode {
                 }
             });
 
-            pars = pars.clone({memsrc_e::device, 0});
+            pars = pars.clone({memsrc_e::device});
         }
 
         set_output("ZSParticles", outParticles);
@@ -369,7 +369,7 @@ struct PointsToZSParticles2 : INode {
                 }
             });
 
-            pars = pars.clone({memsrc_e::device, 0});
+            pars = pars.clone({memsrc_e::device});
         }
 
         set_output("ZSParticles", outParticles);

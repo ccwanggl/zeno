@@ -19,7 +19,8 @@ namespace zeno
         std::string extensions;
         std::vector<std::shared_ptr<Texture2DObject>> tex2Ds;
         std::vector<std::shared_ptr<TextureObjectVDB>> tex3Ds;
-        std::string transform;
+
+        std::string parameters; // json
         std::string mtlidkey;  // unused for now
 
         size_t serializeSize() const
@@ -29,6 +30,10 @@ namespace zeno
             auto mtlidkeyLen{mtlidkey.size()};
             size += sizeof(mtlidkeyLen);
             size += mtlidkeyLen;
+
+            auto paramLen {parameters.size()};
+            size += sizeof(paramLen);
+            size += paramLen;
 
             auto vertLen{vert.size()};
             size += sizeof(vertLen);
@@ -65,10 +70,6 @@ namespace zeno
                 size += tex3DStrSize;
             }
 
-            auto transformLen{transform.size()};
-            size += sizeof(transformLen);
-            size += transformLen;
-
             return size;
         }
 
@@ -82,6 +83,12 @@ namespace zeno
 
             mtlidkey.copy(str + i, mtlidkeyLen);
             i += mtlidkeyLen;
+
+            auto paramLen{parameters.size()};
+            memcpy(str+i, &paramLen, sizeof(paramLen));
+            i += sizeof(paramLen);
+            parameters.copy(str+i, paramLen);
+            i += paramLen;
 
             auto vertLen{vert.size()};
             memcpy(str + i, &vertLen, sizeof(vertLen));
@@ -140,13 +147,6 @@ namespace zeno
                 memcpy(str + i, tex3DStr.data(), tex3DStrSize);
                 i += tex3DStrSize;
             }
-
-            auto transformLen{transform.size()};
-            memcpy(str + i, &transformLen, sizeof(transformLen));
-            i += sizeof(transformLen);
-
-            transform.copy(str + i, transformLen);
-            i += transformLen;
         }
 
         std::vector<char> serialize() const
@@ -166,6 +166,12 @@ namespace zeno
 
             this->mtlidkey = std::string{str + i, mtlidkeyLen};
             i += mtlidkeyLen;
+
+            size_t paramLen;
+            memcpy(&paramLen, str+i, sizeof(paramLen));
+            i += sizeof(paramLen);
+            this->parameters = std::string(str+i, paramLen);
+            i += paramLen;
 
             size_t vertLen;
             memcpy(&vertLen, str + i, sizeof(vertLen));
@@ -236,13 +242,6 @@ namespace zeno
                     TextureObjectVDB::deserialize(tex3DStr));
                 this->tex3Ds[j] = tex3D;
             }
-
-            size_t transformLen;
-            memcpy(&transformLen, str + i, sizeof(transformLen));
-            i += sizeof(transformLen);
-
-            this->transform = std::string{str + i, transformLen};
-            i += transformLen;
         }
 
         static MaterialObject deserialize(const std::vector<char> &str)

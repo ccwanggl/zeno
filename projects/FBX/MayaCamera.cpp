@@ -1,3 +1,4 @@
+#include <utility>
 #include <zeno/zeno.h>
 #include <zeno/types/CameraObject.h>
 #include <zeno/utils/arrayindex.h>
@@ -12,11 +13,14 @@
 #include <zeno/types/DictObject.h>
 #include <zeno/types/CameraObject.h>
 #include <zeno/types/UserData.h>
+#include <zeno/types/LightObject.h>
 
 #include "assimp/scene.h"
 
 #include "Definition.h"
-#include "json.hpp"
+#include "tinygltf/json.hpp"
+
+#include <memory>
 
 #include <glm/vec4.hpp>
 #include <glm/mat4x4.hpp>
@@ -27,7 +31,6 @@
 #include <glm/gtx/matrix_decompose.hpp>
 
 #include <fstream>
-#include <regex>
 
 #define SET_CAMERA_DATA                         \
     out_pos = (n->pos);                       \
@@ -80,58 +83,6 @@ ZENO_DEFNODE(CihouMayaCameraFov)({
         {"float", "fov"},
     },
     {},
-    {"FBX"},
-});
-
-struct CameraNode: zeno::INode{
-    virtual void apply() override {
-        auto camera = std::make_unique<zeno::CameraObject>();
-
-        camera->pos = get_input2<zeno::vec3f>("pos");
-        camera->up = get_input2<zeno::vec3f>("up");
-        camera->view = get_input2<zeno::vec3f>("view");
-        camera->fov = get_input2<float>("fov");
-        camera->aperture = get_input2<float>("aperture");
-        camera->focalPlaneDistance = get_input2<float>("focalPlaneDistance");
-        camera->userData().set2("frame", get_input2<float>("frame"));
-
-        auto other_props = get_input2<std::string>("other");
-        std::regex reg(",");
-        std::sregex_token_iterator p(other_props.begin(), other_props.end(), reg, -1);
-        std::sregex_token_iterator end;
-        std::vector<float> prop_vals;
-        while (p != end) {
-            prop_vals.push_back(std::stof(*p));
-            p++;
-        }
-        if (prop_vals.size() == 6) {
-            camera->isSet = true;
-            camera->center = {prop_vals[0], prop_vals[1], prop_vals[2]};
-            camera->theta = prop_vals[3];
-            camera->phi = prop_vals[4];
-            camera->radius = prop_vals[5];
-        }
-
-        set_output("camera", std::move(camera));
-    }
-};
-
-ZENO_DEFNODE(CameraNode)({
-    {
-        {"vec3f", "pos", "0,0,5"},
-        {"vec3f", "up", "0,1,0"},
-        {"vec3f", "view", "0,0,-1"},
-        {"float", "fov", "45"},
-        {"float", "aperture", "0.1"},
-        {"float", "focalPlaneDistance", "2.0"},
-        {"string", "other", ""},
-        {"int", "frame", "0"},
-    },
-    {
-        {"CameraObject", "camera"},
-    },
-    {
-    },
     {"FBX"},
 });
 
@@ -240,106 +191,104 @@ ZENO_DEFNODE(CameraEval)({
     {"FBX"},
 });
 
-struct LightNode : INode {
+struct ExtractCamera: zeno::INode {
+
     virtual void apply() override {
-        auto isL = get_input2<int>("islight");
-        auto inverdir = get_input2<int>("invertdir");
-        auto position = get_input2<zeno::vec3f>("position");
-        auto scale = get_input2<zeno::vec3f>("scale");
-        auto rotate = get_input2<zeno::vec3f>("rotate");
-        auto quaternion = get_input2<zeno::vec4f>("quaternion");
-        auto intensity = get_input2<float>("intensity");
-        auto color = get_input2<zeno::vec3f>("color");
-        std::string shape = "Plane";
+        auto cam = get_input2<zeno::CameraObject>("camobject");
 
-        auto prim = std::make_shared<zeno::PrimitiveObject>();
-        auto &verts = prim->verts;
-        auto &tris = prim->tris;
+        auto pos = std::make_shared<zeno::NumericObject>();
+        auto up = std::make_shared<zeno::NumericObject>();
+        auto view = std::make_shared<zeno::NumericObject>();
+        auto fov = std::make_shared<zeno::NumericObject>();
+        auto aperture = std::make_shared<zeno::NumericObject>();
+        auto focalPlaneDistance = std::make_shared<zeno::NumericObject>();
 
-        if(shape == "Plane"){
-            auto start_point = zeno::vec3f(0.5, 0, 0.5);
-            float rm = 1.0f;
-            float cm = 1.0f;
+        pos->set<zeno::vec3f>(cam->pos);
+        up->set<zeno::vec3f>(cam->up);
+        view->set<zeno::vec3f>(cam->view);
+        fov->set<float>(cam->fov);
+        aperture->set<float>(cam->aperture);
+        focalPlaneDistance->set<float>(cam->focalPlaneDistance);
 
-            glm::mat4 rotation = glm::mat4(1.0f);
-            glm::vec3 euler = glm::vec3(rotate[0], rotate[1], rotate[2]);
-            rotation = glm::rotate(rotation, euler.z, glm::vec3(0.0f, 0.0f, 1.0f));
-            rotation = glm::rotate(rotation, euler.y, glm::vec3(0.0f, 1.0f, 0.0f));
-            rotation = glm::rotate(rotation, euler.x, glm::vec3(1.0f, 0.0f, 0.0f));
 
-            // Plane Verts
-            for(int i=0; i<=1; i++){
+        set_output("pos", std::move(pos));
+        set_output("up", std::move(up));
+        set_output("view", std::move(view));
+        set_output("fov", std::move(fov));
+        set_output("aperture", std::move(aperture));
+        set_output("focalPlaneDistance", std::move(focalPlaneDistance));
+    }
+};
+ZENDEFNODE(ExtractCamera,
+           {       /* inputs: */
+               {
+                    "camobject"
+               },  /* outputs: */
+               {
+                   "pos", "up", "view", "fov", "aperture", "focalPlaneDistance"
+               },  /* params: */
+               {
 
-                auto rp = start_point - zeno::vec3f(i*rm, 0, 0);
-                for(int j=0; j<=1; j++){
-                    auto p = rp - zeno::vec3f(0, 0, j*cm);
-                    // S R Q T
-                    p = p * scale;  // Scale
-                    auto gp = glm::vec3(p[0], p[1], p[2]);
-                    glm::vec4 result = rotation * glm::vec4(gp, 1.0f);  // Rotate
-                    gp = glm::vec3(result.x, result.y, result.z);
-                    glm::quat rotation(quaternion[0], quaternion[1], quaternion[2], quaternion[3]);
-                    gp = glm::rotate(rotation, gp);
-                    p = zeno::vec3f(gp.x, gp.y, gp.z);
-                    auto zp = zeno::vec3f(p[0], p[1], p[2]);
-                    zp = zp + position;  // Translate
+               },  /* category: */
+               {
+                   "FBX",
+               }
+           });
 
-                    verts.push_back(zp);
-                }
-            }
+struct DirtyTBN : INode {
+    virtual void apply() override {
 
-            // Plane Indices
-            tris.emplace_back(zeno::vec3i(0, 3, 1));
-            tris.emplace_back(zeno::vec3i(3, 0, 2));
+        auto AxisT = get_input2<zeno::vec3f>("T");
+        auto AxisB = get_input2<zeno::vec3f>("B");
+        //auto AxisN = get_input2<zeno::vec3f>("N");
 
+        if (lengthSquared(AxisT) == 0 ) {
+            AxisT = {1,0,0};
         }
-
-        auto &clr = prim->verts.add_attr<zeno::vec3f>("clr");
-        auto c = color * intensity;
-        for(int i=0; i<verts.size(); i++){
-            clr[i] = c;
+        AxisT = zeno::normalize(AxisT);
+        
+        if (lengthSquared(AxisB) == 0 ) {
+            AxisB = {0,0,1};
         }
+        AxisB = zeno::normalize(AxisB);
 
-        if(inverdir){
-            for(int i=0;i<prim->tris.size(); i++){
-                int tmp = prim->tris[i][1];
-                prim->tris[i][1] = prim->tris[i][0];
-                prim->tris[i][0] = tmp;
-            }
+        auto tmp = zeno::dot(AxisT, AxisB);
+        if (abs(tmp) > 0.0) { // not vertical
+            AxisB -= AxisT * tmp;
+            AxisB = zeno::normalize(AxisB);
         }
+        
+        if (has_input("prim")) {
+            auto prim = get_input<PrimitiveObject>("prim");
 
-        prim->userData().set2("isRealTimeObject", std::move(isL));
-        prim->userData().set2("isL", std::move(isL));
-        prim->userData().set2("ivD", std::move(inverdir));
-        prim->userData().set2("pos", std::move(position));
-        prim->userData().set2("scale", std::move(scale));
-        prim->userData().set2("rotate", std::move(rotate));
-        prim->userData().set2("quaternion", std::move(quaternion));
-        prim->userData().set2("shape", std::move(shape));
-        prim->userData().set2("color", std::move(color));
-        prim->userData().set2("intensity", std::move(intensity));
+            auto pos = prim->userData().get2<zeno::vec3f>("pos", {0,0,0});
+            auto scale = prim->userData().get2<zeno::vec3f>("scale", {1,1,1});
 
-        set_output("prim", std::move(prim));
+            auto v0 = pos - AxisT * scale[0] * 0.5f - AxisB * scale[2] * 0.5f;
+            auto e1 = AxisT * scale[0];
+            auto e2 = AxisB * scale[2];
+
+            prim->verts[0] = v0 + e1 + e2;
+            prim->verts[1] = v0 + e1;
+            prim->verts[2] = v0 + e2;
+            prim->verts[3] = v0;
+
+            set_output("prim", std::move(prim));
+        }
     }
 };
 
-ZENO_DEFNODE(LightNode)({
+
+ZENO_DEFNODE(DirtyTBN)({
     {
-        {"vec3f", "position", "0, 0, 0"},
-        {"vec3f", "scale", "1, 1, 1"},
-        {"vec3f", "rotate", "0, 0, 0"},
-        {"vec4f", "quaternion", "1, 0, 0, 0"},
-        {"vec3f", "color", "1, 1, 1"},
-        {"float", "intensity", "1"},
-        {"bool", "islight", "1"},
-        {"bool", "invertdir", "1"}
+        {"PrimitiveObject", "prim"},
+        {"vec3f", "T", "1, 0, 0"},
+        {"vec3f", "B", "0, 0, 1"},
     },
     {
         "prim"
     },
-    {
-
-    },
+    {},
     {"shader"},
 });
 

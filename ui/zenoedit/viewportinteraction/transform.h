@@ -31,8 +31,9 @@ public:
     void removeObject(const std::string& name);
     void removeObject(const std::unordered_set<std::string>& names);
     bool calcTransformStart(glm::vec3 ori, glm::vec3 dir, glm::vec3 front);
-    bool clickedAnyHandler(QVector3D ori, QVector3D dir, glm::vec3 front);
-    void transform(QVector3D camera_pos, glm::vec2 mouse_pos, QVector3D ray_dir, glm::vec3 front, glm::mat4 vp);
+    bool clickedAnyHandler(glm::vec3 ori, glm::vec3 dir, glm::vec3 front);
+    bool hoveredAnyHandler(glm::vec3 ori, glm::vec3 dir, glm::vec3 front);
+    void transform(glm::vec3 camera_pos, glm::vec3 ray_dir, glm::vec2 mouse_start, glm::vec2 mouse_pos, glm::vec3 front, glm::mat4 vp);
     void startTransform();
     void endTransform(bool moved);
     bool isTransforming() const;
@@ -52,8 +53,11 @@ private:
     zenovis::Scene* scene() const;
     zenovis::Session* session() const;
 
+    // 计算translate并调用doTransform
     void translate(glm::vec3 start, glm::vec3 end, glm::vec3 axis);
+    // 计算scale并调用doTransform
     void scale(float scale_size, vec3i axis);
+    // 计算rotate并调用doTransform
     void rotate(glm::vec3 start_vec, glm::vec3 end_vec, glm::vec3 axis);
 
     void createNewTransformNode(NodeLocation& node_location,
@@ -61,11 +65,8 @@ private:
     void syncToTransformNode(NodeLocation& node_location,
                              const std::string& obj_name);
 
+    // 把FakeTransform上的SRT应用到primitive上
     void doTransform();
-
-    static glm::vec3 QVec3ToGLMVec3(QVector3D QVec3) {
-        return {QVec3.x(), QVec3.y(), QVec3.z()};
-    }
     void markObjectInteractive(const std::string& obj_name);
     void unmarkObjectInteractive(const std::string& obj_name);
     void markObjectsInteractive();
@@ -101,17 +102,15 @@ private:
 
     glm::vec3 m_objects_center;
 
+    glm::vec3 m_pivot;
     glm::vec3 m_trans;
     glm::vec4 m_rotate;
     glm::vec3 m_scale;
 
-    glm::vec3 m_last_trans;
-    glm::vec4 m_last_rotate;
-    glm::vec3 m_last_scale;
-
     glm::vec3 m_trans_start;
     glm::vec3 m_rotate_start;
     // glm::vec3 m_scale_start;
+    glm::vec3 _objects_center_start;
 
     bool m_status;
     int m_operation;

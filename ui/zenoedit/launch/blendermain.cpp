@@ -5,7 +5,7 @@
 #include <zenomodel/include/api.h>
 #include <zenomodel/include/igraphsmodel.h>
 #include <zenomodel/include/graphsmanagment.h>
-#include "json.hpp"
+#include "tinygltf/json.hpp"
 
 using Path = std::filesystem::path;
 using Json = nlohmann::json;
@@ -390,7 +390,7 @@ if(value.separate != ""){ \
                 ZENO_HANDLE texture_2d_Node = Zeno_AddNode(hGraph, "MakeTexture2D");
                 Zeno_SetPos(hGraph, texture_2d_Node, NodePos_1);
 
-                Zeno_AddLink(hGraph, texture_2d_Node, "tex", make_list_Node, "obj" + std::to_string(0));
+                Zeno_AddLink(hGraph, texture_2d_Node, "tex", make_list_Node, "obj" + std::to_string(texture_2d_count));
 
                 Zeno_SetInputDefl(hGraph, texture_2d_Node, "path", tex_path);
 

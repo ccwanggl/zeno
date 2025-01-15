@@ -2,34 +2,56 @@
 
 #include "zxxglslvec.h"
 
+#ifndef uint
+#define uint unsigned int
+#endif
+
 struct MatOutput {
-    vec3  basecolor;
-    float metallic;
+    vec3 basecolor;
     float roughness;
-    float subsurface;
-    float specular;
-    float specularTint;
+    float opacity;
+    float thin;
+    float flatness;
+    float doubleSide;
     float anisotropic;
     float anisoRotation;
+    float ior;
+    vec3 reflectance;
+
+    float metallic;
+    vec3 metalColor;
+
+    float specular;
+    float specularTint;
     float sheen;
     float sheenTint;
+
     float clearcoat;
-    float clearcoatGloss;
+    vec3 clearcoatColor;
     float clearcoatRoughness;
     float clearcoatIOR;
-    float opacity;
-    float ior;
-    float flatness;
+
     float specTrans;
-    float scatterDistance;
-    float thin;
-    float doubleSide;
-    float scatterStep;
-    float smoothness;
+    vec3 transColor;
+    vec3 transTint;
+    float transTintDepth;
+    float transDistance;
+    vec3 transScatterColor;
+
+    float diffraction;
+    vec3  diffractColor;
+
+    float subsurface;
     vec3  sssColor;
     vec3  sssParam;
+    bool sssFxiedRadius;
+    float scatterDistance;
+    float scatterStep;
+    float smoothness;
     float displacement;
-    vec3 reflectance;
+    float shadowReceiver;
+    float isHair;
+    vec3  mask_value;
 
     vec3 nrm;
     vec3 emission;
@@ -41,6 +63,8 @@ struct MatInput {
     vec3 uv;
     vec3 clr;
     vec3 tang;
+
+    uint instIdx;
     vec3 instPos;
     vec3 instNrm;
     vec3 instUv;
@@ -48,6 +72,11 @@ struct MatInput {
     vec3 instTang;
     float NoL;
     float LoV;
+    
+    float rayLength;
+    bool isBackFace;
+    bool isShadowRay;
+    
     vec3 reflectance;
     vec3 N;
     vec3 T;

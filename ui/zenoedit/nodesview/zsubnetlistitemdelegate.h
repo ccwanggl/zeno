@@ -42,11 +42,25 @@ public slots:
     void onDelete();
 private slots:
     void onRename(const QModelIndex &index);
+    void onSaveSubgraph(const QModelIndex& index);
+
+private:
+    void getSubgraphs(const QModelIndex& index, QModelIndexList& subgraphs);
+    void setForkLock(QSortFilterProxyModel* model, bool bLocked);
+    void setSubgraphType(QSortFilterProxyModel* model, bool bPreset);
 
 private:
     IGraphsModel* m_model;
     QModelIndexList m_selectedIndexs;
 };
 
+class SubListSortProxyModel :public QSortFilterProxyModel
+{
+public:
+    explicit SubListSortProxyModel(QObject* parent = nullptr);
+protected:
+    bool lessThan(const QModelIndex& source_left, const QModelIndex& source_right) const override;
+    bool filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override;
+};
 
 #endif

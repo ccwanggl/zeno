@@ -13,6 +13,7 @@ struct DrawOptions {
     bool render_wireframe = false;
 
     bool enable_gi = false;
+    bool uv_mode = false;
     bool smooth_shading = false;
     bool normal_check = false;
     bool simpleRender = false;
@@ -22,6 +23,7 @@ struct DrawOptions {
     int num_samples = 1;
     int msaa_samples = 0;
     bool denoise = false;
+    float viewportPointSizeScale = 1;
 
     std::shared_ptr<IGraphicHandler> handler;
 

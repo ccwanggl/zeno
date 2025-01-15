@@ -10,32 +10,12 @@
 #include "layout/winlayoutrw.h"
 #include "cache/zcachemgr.h"
 #include "launch/corelaunch.h"
-
-
-struct ZENO_RECORD_RUN_INITPARAM {
-    QString sZsgPath = "";
-    bool bRecord = false;
-    bool bOptix = false;    //is optix view.
-    bool isExportVideo = false;
-    bool needDenoise = false;
-    int iFrame = 0;
-    int iSFrame = 0;
-    int iSample = 0;
-    int iBitrate = 0;
-    int iFps = 0;
-    QString sPixel = "";
-    QString sPath = "";
-    QString audioPath = "";
-    QString configFilePath = "";
-    QString videoName = "";
-    QString subZsg = "";
-    bool exitWhenRecordFinish = false;
-};
+#include <QTcpSocket>
+#include <QLocalSocket>
 
 
 class ZenoDockWidget;
 class DisplayWidget;
-class ZOptixViewport;
 class ZTimeline;
 class LiveTcpServer;
 class LiveHttpServer;
@@ -63,16 +43,20 @@ public:
     bool isAlwaysLightCamera() const;
     bool isAlwaysMaterial() const;
     void resetTimeline(TIMELINE_INFO info);
+    void initUserdata(USERDATA_SETTING info);
     ZTimeline* timeline() const;
     QVector<DisplayWidget*> viewports() const;
     DisplayWidget* getCurrentViewport() const;
     DisplayWidget* getOptixWidget() const;
     ZenoGraphsEditor* getAnyEditor() const;
     void dispatchCommand(QAction* pAction, bool bTriggered);
-    std::shared_ptr<ZCacheMgr> cacheMgr() const;
 
     void doFrameUpdate(int frame);
     void sortRecentFile(QStringList &lst);
+    bool isOnlyOptixWindow() const;
+    bool isRecordByCommandLine() const;
+    void openFileAndUpdateParam(const QString& path, const QString& paramJson);
+    void statusbarShowMessage(const std::string& text, int timeout = 0) const;
 
     QLineEdit* selected = nullptr;
     ZenoLights* lightPanel = nullptr;
@@ -115,6 +99,7 @@ public:
         ACTION_SOLID,
         ACTION_SHADING,
         ACTION_OPTIX,
+        ACTION_UV_MODE,
         //View EnvTex
         ACTION_BLACK_WHITE,
         ACTION_GREEK,
@@ -139,6 +124,7 @@ public:
         ACTION_SET_NASLOC,
         ACTION_ZENCACHE,
         ACTION_SET_SHORTCUT,
+        ACTION_PREFERENCES,
         //Others
         ACTION_CUSTOM_UI,
         ACTION_ZOOM,
@@ -153,8 +139,8 @@ signals:
     void visObjectsUpdated(ViewportWidget* viewport, int frameid);
     void visFrameUpdated(bool bGLView, int frameid);
     void alwaysModeChanged(bool bAlways);
-    void dockSeparatorMoving(bool bMoving);
     void runFinished();
+    void runStarted();
 
 public slots:
     void openFileDialog();
@@ -168,7 +154,7 @@ public slots:
     void onMenuActionTriggered(bool bTriggered);
     void onSplitDock(bool);
     void onCloseDock();
-    void importGraph();
+    void importGraph(bool bPreset = false);
     void exportGraph();
     void onNodesSelected(const QModelIndex& subgIdx, const QModelIndexList& nodes, bool select);
     void onPrimitiveSelected(const std::unordered_set<std::string>& primids);
@@ -180,14 +166,16 @@ public slots:
     void saveDockLayout();
     void loadSavedLayout();
     void onLangChanged(bool bChecked);
-    void solidRunRender(const ZENO_RECORD_RUN_INITPARAM& param);
+    void solidRunRender(const ZENO_RECORD_RUN_INITPARAM& param, LAUNCH_PARAM& launchparam);
     void optixRunRender(const ZENO_RECORD_RUN_INITPARAM& param, LAUNCH_PARAM launchparam);
+    void optixClientRun(int port, const char* cachedir, int cachenum, int sFrame, int eFrame, int finishedFrames, const char* sessionId);
+    void optixClientSend(QString& info);
+    void optixClientStartRec();
     void onRunTriggered(bool applyLightAndCameraOnly = false, bool applyMaterialOnly = false);
     void updateNativeWinTitle(const QString& title);
     void toggleTimelinePlay(bool bOn);
-    void onDockSeparatorMoving(bool bMoving);
     void onZenovisFrameUpdate(bool bGLView, int frameid);
-
+    void onCheckUpdate();
 protected:
     void resizeEvent(QResizeEvent* event) override;
     bool event(QEvent* event) override;
@@ -226,6 +214,7 @@ private:
     void shortCutDlg();
     void killOptix();
     DisplayWidget* getOnlyViewport() const;
+    bool resetProc();
 
     ZTimeline* m_pTimeline;
     PtrLayoutNode m_layoutRoot;
@@ -234,10 +223,13 @@ private:
     bool m_bAlwaysLightCamera;
     bool m_bAlwaysMaterial;
     int m_nResizeTimes;
-    bool m_bMovingSeparator;    //dock separator.
+    bool m_bOnlyOptix;          //isolate optix window.
     Ui::MainWindow* m_ui;
 
-    std::shared_ptr<ZCacheMgr> m_spCacheMgr;
+    std::unique_ptr<QLocalSocket> optixClientSocket;
+    bool m_bOptixProcRecording = false;
+
+    bool m_bRecordByCommandLine = false;
 };
 
 #endif
